@@ -433,6 +433,10 @@ function paintScanStep() {
   $("scanFill").style.width = "0%"; $("scanLive").textContent = "";
 }
 function nextScanStep() {
+  const a = scan.acc, robust = (arr, q) => { if (!arr || arr.length < 8) return null; const s = [...arr].sort((x, y) => x - y); return s[Math.floor((s.length - 1) * q)]; };
+  if (a.kneeMin === undefined && a.knee) { a.kneeMin = robust(a.knee, 0.05); a.kneeMax = robust(a.knee, 0.95); a.hipSquatMin = robust(a.hipSquat, 0.05); a.hipSquatMax = robust(a.hipSquat, 0.95); }
+  if (a.shoulderFlexMax === undefined && a.shoulderFlex) a.shoulderFlexMax = robust(a.shoulderFlex, 0.95);
+  if (a.hipHingeMin === undefined && a.hipHinge) { a.hipHingeMin = robust(a.hipHinge, 0.05); a.hipHingeMax = robust(a.hipHinge, 0.95); }
   scan.step++; scan.t0 = 0; scan.stable = 0;
   if (scan.step >= SCAN_STEPS.length) { finishScan(); return; }
   paintScanStep(); speak(SCAN_STEPS[scan.step].title, "info");
@@ -478,27 +482,39 @@ function runScan(lm, wl, t) {
     if (p >= 1) nextScanStep();
     return;
   }
-  // 가동범위 단계: 시간 창 동안 최소/최대 수집
-  const upd = (k, v) => { a[k + "Min"] = Math.min(a[k + "Min"] ?? 999, v); a[k + "Max"] = Math.max(a[k + "Max"] ?? -999, v); };
+  // 가동범위 단계: 값을 모아두고 단계 끝에 튄 값 제외하고 계산 (하위/상위 5% 지점)
+  const push = (k, v, minPhys, maxPhys) => { if (v < minPhys || v > maxPhys) return; (a[k] = a[k] || []).push(v); };
+  const robust = (arr, q) => { if (!arr || arr.length < 8) return null; const s = [...arr].sort((x, y) => x - y); return s[Math.floor((s.length - 1) * q)]; };
+  const visOk = (...idx) => idx.every(i => lm[i].visibility > 0.6);
   if (s.id === "squat") {
-    const kL = angleAt(lm[23], lm[25], lm[27]), kR = angleAt(lm[24], lm[26], lm[28]);
-    const vL = (lm[23].visibility + lm[25].visibility + lm[27].visibility), vR = (lm[24].visibility + lm[26].visibility + lm[28].visibility);
-    const k = vL >= vR ? kL : kR; upd("knee", k);
-    const h = vL >= vR ? angleAt(lm[11], lm[23], lm[25]) : angleAt(lm[12], lm[24], lm[26]); upd("hipSquat", h);
-    $("scanLive").textContent = `무릎 ${k.toFixed(0)}° (최소 ${a.kneeMin.toFixed(0)}°) · 고관절 ${h.toFixed(0)}°`;
+    const useL = (lm[23].visibility + lm[25].visibility + lm[27].visibility) >= (lm[24].visibility + lm[26].visibility + lm[28].visibility);
+    const [H, K, A, S] = useL ? [23, 25, 27, 11] : [24, 26, 28, 12];
+    if (visOk(H, K, A)) { const k = angleAt(lm[H], lm[K], lm[A]); push("knee", k, 30, 180); a.liveK = k; }
+    if (visOk(S, H, K)) { const h = angleAt(lm[S], lm[H], lm[K]); push("hipSquat", h, 30, 180); a.liveH = h; }
+    $("scanLive").textContent = `무릎 ${a.liveK?.toFixed(0) ?? "-"}° (최소 ${robust(a.knee, 0.05)?.toFixed(0) ?? "-"}°) · 고관절 ${a.liveH?.toFixed(0) ?? "-"}°`;
   } else if (s.id === "arms") {
-    const sL = angleAt(lm[23], lm[11], lm[15]), sR = angleAt(lm[24], lm[12], lm[16]);
-    const v = Math.max(sL, sR); upd("shoulderFlex", v);
-    $("scanLive").textContent = `어깨 굴곡 ${v.toFixed(0)}° (최대 ${a.shoulderFlexMax.toFixed(0)}°)`;
+    let v = null;
+    if (visOk(23, 11, 15)) v = angleAt(lm[23], lm[11], lm[15]);
+    if (visOk(24, 12, 16)) v = Math.max(v ?? 0, angleAt(lm[24], lm[12], lm[16]));
+    if (v != null) { push("shoulderFlex", v, 0, 180); a.liveS = v; }
+    $("scanLive").textContent = `어깨 굴곡 ${a.liveS?.toFixed(0) ?? "-"}° (최대 ${robust(a.shoulderFlex, 0.95)?.toFixed(0) ?? "-"}°)`;
   } else if (s.id === "hinge") {
-    const kL = angleAt(lm[23], lm[25], lm[27]), kR = angleAt(lm[24], lm[26], lm[28]);
-    const hL = angleAt(lm[11], lm[23], lm[25]), hR = angleAt(lm[12], lm[24], lm[26]);
-    const k = Math.max(kL, kR), h = Math.min(hL, hR);
-    if (k > 140) upd("hipHinge", h); // 무릎이 펴진 상태에서만
-    $("scanLive").textContent = `고관절 ${h.toFixed(0)}°${a.hipHingeMin != null ? ` (최소 ${a.hipHingeMin.toFixed(0)}°)` : ""} · 무릎 ${k.toFixed(0)}°`;
+    const useL = (lm[23].visibility + lm[25].visibility) >= (lm[24].visibility + lm[26].visibility);
+    const [S, H, K, A] = useL ? [11, 23, 25, 27] : [12, 24, 26, 28];
+    if (visOk(S, H, K)) {
+      const h = angleAt(lm[S], lm[H], lm[K]); const k = visOk(A) ? angleAt(lm[H], lm[K], lm[A]) : 170;
+      if (k > 140) push("hipHinge", h, 30, 180); a.liveHH = h; a.liveKK = k;
+    }
+    $("scanLive").textContent = `고관절 ${a.liveHH?.toFixed(0) ?? "-"}° (최소 ${robust(a.hipHinge, 0.05)?.toFixed(0) ?? "-"}°) · 무릎 ${a.liveKK?.toFixed(0) ?? "-"}°`;
   }
   $("scanFill").style.width = Math.min(100, el / s.sec * 100).toFixed(0) + "%";
-  if (el >= s.sec) nextScanStep();
+  if (el >= s.sec) {
+    // 단계 결과 확정
+    if (s.id === "squat") { a.kneeMin = robust(a.knee, 0.05); a.kneeMax = robust(a.knee, 0.95); a.hipSquatMin = robust(a.hipSquat, 0.05); a.hipSquatMax = robust(a.hipSquat, 0.95); }
+    if (s.id === "arms") a.shoulderFlexMax = robust(a.shoulderFlex, 0.95);
+    if (s.id === "hinge") { a.hipHingeMin = robust(a.hipHinge, 0.05); a.hipHingeMax = robust(a.hipHinge, 0.95); }
+    nextScanStep();
+  }
 }
 function finishScan() {
   const a = scan.acc, F = a.front || {};
@@ -506,7 +522,7 @@ function finishScan() {
     date: Date.now(),
     ratios: { thigh: F.thigh, shin: F.shin, upperArm: F.upperArm, forearm: F.forearm, shoulderW: F.shoulderW, hipW: F.hipW },
     shoulderTilt: F.shoulderTilt, pelvisTilt: F.pelvisTilt, legDiff: F.legDiff,
-    rom: { kneeMin: a.kneeMin, kneeMax: a.kneeMax, hipMinSquat: a.hipSquatMin, hipMaxSquat: a.hipSquatMax, hipMinHinge: a.hipHingeMin, hipMaxHinge: a.hipHingeMax, shoulderFlexMax: a.shoulderFlexMax },
+    rom: { kneeMin: a.kneeMin ?? null, kneeMax: a.kneeMax ?? null, hipMinSquat: a.hipSquatMin ?? null, hipMaxSquat: a.hipSquatMax ?? null, hipMinHinge: a.hipHingeMin ?? null, hipMaxHinge: a.hipHingeMax ?? null, shoulderFlexMax: a.shoulderFlexMax ?? null },
     baselines: (profile && profile.baselines) || {},
   });
   saveProfile(); endScan(true);
