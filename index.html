@@ -373,6 +373,11 @@ function angleAt(a, b, c) {
   return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
 }
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function angle3D(a, b, c) { // b에서의 3D 각도 (z가 없으면 2D와 동일)
+  const v1 = { x: a.x - b.x, y: a.y - b.y, z: (a.z ?? 0) - (b.z ?? 0) }, v2 = { x: c.x - b.x, y: c.y - b.y, z: (c.z ?? 0) - (b.z ?? 0) };
+  const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z, m = Math.hypot(v1.x, v1.y, v1.z) * Math.hypot(v2.x, v2.y, v2.z) || 1e-6;
+  return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
+}
 // 두 점을 잇는 선이 수평에서 얼마나 기울었나 (-90~90°, 좌우 반전·카메라 방향과 무관)
 function tiltDeg(a, b) { let d = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI; if (d > 90) d -= 180; if (d < -90) d += 180; return d; }
 function median(v) { win.push(v); if (win.length > 5) win.shift(); const s = [...win].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
@@ -409,9 +414,9 @@ $("profClear").onclick = () => { profile = null; try { localStorage.removeItem("
 var scan = null; // { step, t0, acc }
 const SCAN_STEPS = [
   { id:"front", title:"정면으로 서 주세요", desc:"팔을 몸에서 살짝 떼고, 머리부터 발까지 다 보이게. 3초간 가만히.", need:[11,12,23,24,25,26,27,28], sec:3, hold:true },
-  { id:"squat", title:"스쿼트 3회 — 최대한 깊게", desc:"내려갈 수 있는 만큼 끝까지. 측면이나 45도가 좋아요.", need:[23,24,25,26,27,28], sec:12 },
-  { id:"arms",  title:"양팔을 머리 위로 3회", desc:"팔꿈치를 펴고 귀 옆까지 최대한 올렸다 내리기.", need:[11,12,13,14,15,16,23,24], sec:10 },
-  { id:"hinge", title:"무릎 펴고 상체 숙이기 3회", desc:"무릎은 거의 편 채 엉덩이를 뒤로 빼며 숙이기(데드리프트 자세).", need:[11,12,23,24,25,26], sec:10 },
+  { id:"squat", title:"옆으로 서서 스쿼트 3회", desc:"몸을 옆으로 돌려 서세요. 내려갈 수 있는 만큼 끝까지, 천천히.", need:[23,24,25,26,27,28], sec:12 },
+  { id:"arms",  title:"양팔을 머리 위로 3회", desc:"정면 또는 옆. 팔꿈치를 펴고 귀 옆까지 최대한 올렸다 내리기.", need:[11,12,13,14,15,16,23,24], sec:10 },
+  { id:"hinge", title:"옆으로 서서 상체 숙이기 3회", desc:"무릎은 거의 편 채 엉덩이를 뒤로 빼며 숙이기(데드리프트 자세). 옆모습이 보여야 정확해요.", need:[11,12,23,24,25,26], sec:10 },
 ];
 function startScan() {
   if (!running) { toast("먼저 카메라를 시작하세요"); return; }
@@ -482,27 +487,29 @@ function runScan(lm, wl, t) {
     if (p >= 1) nextScanStep();
     return;
   }
-  // 가동범위 단계: 값을 모아두고 단계 끝에 튄 값 제외하고 계산 (하위/상위 5% 지점)
+  // 가동범위 단계: 앞뒤 움직임은 2D에서 왜곡되므로 3D(월드) 좌표로 각도 계산. 값을 모아 단계 끝에 튄 값 제외(하위/상위 5%)
+  const P = wl || lm; // 3D 좌표가 있으면 그걸로
+  const ang3 = (i, j, k) => angle3D(P[i], P[j], P[k]);
   const push = (k, v, minPhys, maxPhys) => { if (v < minPhys || v > maxPhys) return; (a[k] = a[k] || []).push(v); };
   const robust = (arr, q) => { if (!arr || arr.length < 8) return null; const s = [...arr].sort((x, y) => x - y); return s[Math.floor((s.length - 1) * q)]; };
   const visOk = (...idx) => idx.every(i => lm[i].visibility > 0.6);
   if (s.id === "squat") {
     const useL = (lm[23].visibility + lm[25].visibility + lm[27].visibility) >= (lm[24].visibility + lm[26].visibility + lm[28].visibility);
     const [H, K, A, S] = useL ? [23, 25, 27, 11] : [24, 26, 28, 12];
-    if (visOk(H, K, A)) { const k = angleAt(lm[H], lm[K], lm[A]); push("knee", k, 30, 180); a.liveK = k; }
-    if (visOk(S, H, K)) { const h = angleAt(lm[S], lm[H], lm[K]); push("hipSquat", h, 30, 180); a.liveH = h; }
+    if (visOk(H, K, A)) { const k = ang3(H, K, A); push("knee", k, 30, 180); a.liveK = k; }
+    if (visOk(S, H, K)) { const h = ang3(S, H, K); push("hipSquat", h, 30, 180); a.liveH = h; }
     $("scanLive").textContent = `무릎 ${a.liveK?.toFixed(0) ?? "-"}° (최소 ${robust(a.knee, 0.05)?.toFixed(0) ?? "-"}°) · 고관절 ${a.liveH?.toFixed(0) ?? "-"}°`;
   } else if (s.id === "arms") {
     let v = null;
-    if (visOk(23, 11, 15)) v = angleAt(lm[23], lm[11], lm[15]);
-    if (visOk(24, 12, 16)) v = Math.max(v ?? 0, angleAt(lm[24], lm[12], lm[16]));
+    if (visOk(23, 11, 15)) v = ang3(23, 11, 15);
+    if (visOk(24, 12, 16)) v = Math.max(v ?? 0, ang3(24, 12, 16));
     if (v != null) { push("shoulderFlex", v, 0, 180); a.liveS = v; }
     $("scanLive").textContent = `어깨 굴곡 ${a.liveS?.toFixed(0) ?? "-"}° (최대 ${robust(a.shoulderFlex, 0.95)?.toFixed(0) ?? "-"}°)`;
   } else if (s.id === "hinge") {
     const useL = (lm[23].visibility + lm[25].visibility) >= (lm[24].visibility + lm[26].visibility);
     const [S, H, K, A] = useL ? [11, 23, 25, 27] : [12, 24, 26, 28];
     if (visOk(S, H, K)) {
-      const h = angleAt(lm[S], lm[H], lm[K]); const k = visOk(A) ? angleAt(lm[H], lm[K], lm[A]) : 170;
+      const h = ang3(S, H, K); const k = visOk(A) ? ang3(H, K, A) : 170;
       if (k > 140) push("hipHinge", h, 30, 180); a.liveHH = h; a.liveKK = k;
     }
     $("scanLive").textContent = `고관절 ${a.liveHH?.toFixed(0) ?? "-"}° (최소 ${robust(a.hipHinge, 0.05)?.toFixed(0) ?? "-"}°) · 무릎 ${a.liveKK?.toFixed(0) ?? "-"}°`;
