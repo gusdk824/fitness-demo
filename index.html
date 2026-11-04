@@ -185,7 +185,9 @@
     <label class="field" id="holdField" hidden><span>정점 버티기 목표 <b id="holdVal">3초</b></span><input type="range" id="holdTh" min="1" max="5" step="0.5" value="3"></label>
     <div class="section">카메라</div>
     <div class="field" id="facingField"><span>카메라</span>
-      <div style="display:flex;gap:8px"><button class="ghost" id="faceBack" style="flex:1">후면</button><button class="ghost" id="faceFront" style="flex:1">전면</button></div></div>
+      <div style="display:flex;gap:8px"><button class="ghost" id="faceBack" style="flex:1">후면</button><button class="ghost" id="faceFront" style="flex:1">전면</button></div>
+      <div style="display:flex;gap:8px" id="lensRow"><button class="ghost" id="lensNormal" style="flex:1;font-size:13px">후면 기본 렌즈</button><button class="ghost" id="lensWide" style="flex:1;font-size:13px">후면 광각 (0.5×)</button></div>
+      <div id="lensInfo" style="font-size:12px;color:var(--muted)">광각은 가까이 세워도 전신이 들어와요. 가장자리는 휘어지니 사람을 화면 가운데에 두세요.</div></div>
     <div class="field" id="camSelField"><span>카메라 선택 (PC)</span><select id="camSel"></select></div>
     <div class="toggle"><span>화면 좌우 반전</span><button class="sw" id="flipSw" aria-label="좌우 반전"></button></div>
     <div class="section">피드백</div>
@@ -228,10 +230,11 @@ const JOINT = {
   hip:   { L: [11,23,25], R: [12,24,26], label: "고관절 각도", minPhys: 35 },
   thighs:{ custom: true, label: "다리 벌림 각도", minPhys: 3 }, // 양 허벅지 사이 각도 (정면 촬영)
 };
-const ALL = ["depth","lockout","tempo","sym","fatigue"];
+// romShort(가동범위 축소)는 플래그가 아닌 리포트 전용 체크 — 프로필/기준선이 있을 때만 advice에 표시됨
+const ALL = ["depth","lockout","tempo","sym","fatigue","romShort"];
 const EXERCISES = [
-  { id:"legpress",  name:"레그프레스",       joint:"knee",  low:95,  high:155, cam:"측면. 머신 옆에 세우고 엉덩이~발이 다 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:[...ALL,"hip","valgus"] },
-  { id:"squat",     name:"스쿼트",           joint:"knee",  low:100, high:160, cam:"측면 또는 45도. 전신이 보이게", cueLow:"더 앉으세요", cueHigh:"끝까지 일어나세요", checks:[...ALL,"valgus"] },
+  { id:"legpress",  name:"레그프레스",       joint:"knee",  low:95,  high:155, cam:"측면. 머신 옆에 세우고 엉덩이~발이 다 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:[...ALL,"hip","valgus","heel","pelvis","kneeFwd"] }, // kneeFwd: 리포트 전용(정보), 플래그 없음
+  { id:"squat",     name:"스쿼트",           joint:"knee",  low:100, high:160, cam:"측면 또는 45도. 전신이 보이게", cueLow:"더 앉으세요", cueHigh:"끝까지 일어나세요", checks:[...ALL,"valgus","heel","pelvis","hipRise","kneeFwd"] }, // kneeFwd: 리포트 전용
   { id:"legext",    name:"레그 익스텐션",     joint:"knee",  low:100, high:160, cam:"측면. 허벅지와 정강이가 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"] },
   { id:"legcurl",   name:"레그 컬",          joint:"knee",  low:80,  high:150, cam:"측면. 엎드린 채 다리 전체가 보이게", cueLow:"더 당기세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"] },
   { id:"chest",     name:"체스트 프레스",     joint:"elbow", low:90,  high:155, cam:"측면. 어깨~손이 보이게", cueLow:"더 당겨오세요", cueHigh:"끝까지 미세요", checks:ALL },
@@ -242,22 +245,39 @@ const EXERCISES = [
   { id:"tricep",    name:"트라이셉 푸시다운", joint:"elbow", low:90,  high:160, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 누르세요", checks:ALL },
   { id:"pushup",    name:"푸시업",           joint:"elbow", low:90,  high:155, cam:"측면. 전신이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:ALL },
   { id:"outthigh",  name:"아웃타이 · 기본",  joint:"thighs", low:25, high:55, cam:"정면 또는 앞쪽 45도. 골반~무릎이 보이게", cueLow:"끝까지 모으세요", cueHigh:"더 벌리세요",
-    checks:["lockout","hold","hip","tempo","fatigue"], holdSec:3,
+    checks:["lockout","hold","hip","tempo","fatigue","torsoSway","romShort"], holdSec:3,
     tip:"무게는 가볍게(5~10kg), 자세 위주. 발아치로 발판을 누르고, 손잡이는 몸 안쪽으로 미는 힘을 같이 쓰세요. 벌린 끝에서 3초 버티기." },
   { id:"outthigh_lie", name:"아웃타이 · 뒤로 젖힘 (윗엉덩이)", joint:"thighs", low:25, high:50, cam:"앞쪽 45도. 상체 기울기와 골반~무릎이 함께 보이게", cueLow:"끝까지 모으세요", cueHigh:"다리를 멀리 뻗으세요",
-    checks:["lockout","hold","lean","hip","tempo","fatigue"], holdSec:2, lean:{ dir:"back", min:20 },
+    checks:["lockout","hold","lean","hip","tempo","fatigue","torsoSway","romShort"], holdSec:2, lean:{ dir:"back", min:20 },
     tip:"상체를 살짝 들어 뒤로 젖히고(눕힌 형은 배꼽이 천장), 아랫배를 꽉 잡은 채 허벅지 힘으로 다리를 '멀어지게' 뻗으세요. 완전히 쫙 벌리기보다 다리뼈가 길어지는 느낌으로 1~3초 버티기. 골반이 아래로 떨어지면 안 돼요." },
   { id:"outthigh_stiff", name:"아웃타이 · 앞으로 숙임 (엉덩이 전체·하단)", joint:"thighs", low:25, high:55, cam:"앞쪽 45도. 상체 기울기와 골반~무릎이 함께 보이게", cueLow:"버티면서 천천히 모으세요", cueHigh:"더 벌리세요",
-    checks:["lockout","hold","lean","slowReturn","hip","fatigue"], holdSec:1, lean:{ dir:"forward", min:30 }, returnSec:1.0,
+    checks:["lockout","hold","lean","slowReturn","hip","fatigue","torsoSway","romShort"], holdSec:1, lean:{ dir:"forward", min:30 }, returnSec:1.0,
     tip:"고관절 힌지로 상체를 앞으로 숙이고 척추가 길어지는 느낌 유지(배꼽이 바닥). 다리를 연 뒤 돌아올 때가 핵심: 버티면서 천천히, 다리뼈가 길어지게 돌아오세요. 엉덩이가 부풀어 오르는 느낌이 나야 정확한 자세." },
-  { id:"inthigh",   name:"이너타이 (모으기)",  joint:"thighs", low:20, high:55, cam:"정면. 의자 앞에서 골반~무릎이 보이게", cueLow:"더 모으세요", cueHigh:"끝까지 벌리세요", checks:["depth","lockout","tempo","hip","fatigue"],
+  { id:"inthigh",   name:"이너타이 (모으기)",  joint:"thighs", low:20, high:55, cam:"정면. 의자 앞에서 골반~무릎이 보이게", cueLow:"더 모으세요", cueHigh:"끝까지 벌리세요", checks:["depth","lockout","tempo","hip","fatigue","torsoSway","romShort"],
     tip:"발바닥을 잘 눌러 지지하고, 코어는 플랭크처럼 유지. 모을 때 골반이 뒤로 말리지 않게." },
-  { id:"deadlift",  name:"데드리프트",        joint:"hip",   low:90,  high:165, cam:"측면. 전신이 보이게", cueLow:"더 숙이세요", cueHigh:"끝까지 펴세요", checks:ALL },
+  { id:"deadlift",  name:"데드리프트",        joint:"hip",   low:90,  high:165, cam:"측면. 전신이 보이게", cueLow:"더 숙이세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"heel","hipRise"] }, // pelvis 제외: 데드리프트는 무릎이 거의 안 움직여 '무릎 고정+상체 꺾임' 기준이 정상 힌지와 구분 불가 (어깨-엉덩이-무릎 랜드마크로는 요추 말림 분리 못 함)
   { id:"hipthrust", name:"힙 쓰러스트",       joint:"hip",   low:100, high:165, cam:"측면. 어깨~발이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 올리고 쪼이세요",
-    checks:["lockout","hold","arch","feet","depth","tempo","fatigue"], holdSec:1,
+    checks:["lockout","hold","arch","feet","heel","depth","tempo","fatigue","romShort"], holdSec:1,
     tip:"벤치에 견갑골 아래를 대고, 뒤꿈치가 무릎 바로 아래 오게. 복부로 복압을 잡고 엉덩이를 수직으로 올려 최고점에서 1초 강하게 쪼이기. 내려올 때 허리를 꺾거나 말지 말고 척추 각도 그대로 수평 이동." },
 ];
-const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치" };
+const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치", heel:"뒤꿈치 뜸",
+  pelvis:"허리 말림", hipRise:"엉덩이 먼저 뜸", torsoSway:"상체 흔들림", kneeFwd:"무릎 전진", romShort:"가동범위 축소" };
+// ── 공통 로직 체크 임계값 (추후 설정에서 조절 가능하게 한곳에 모음) ──
+const COMMON_TH = {
+  pelvisDeg: 12,          // pelvis: 바닥 구간 몸통 기울기가 기준 대비 이만큼 이상 더 꺾이면 플래그
+  pelvisKneeBand: 15,     // pelvis: '바닥 구간' = 최저 무릎각 + 이 값 이내 (허리 말림이 시작되기 전에 기준을 잡도록 조금 넓게)
+  pelvisRefN: 3,          // pelvis: 기준 기울기 = 바닥 구간에 '들어선 직후' 첫 3 샘플 평균 (내려오는 중 자연스러운 기울기는 제외)
+  pelvisAfterMs: 150,     // pelvis: 바닥 이후 이 시간까지만 봄 (올라오며 생기는 굿모닝은 hipRise 가 담당)
+  hipRiseMs: 400,         // hipRise: 올라오는 구간 첫 0.4초
+  hipRiseRatio: 1.6,      // hipRise: 엉덩이 상승량 ≥ 어깨 상승량 × 1.6
+  hipRiseLeanDeg: 10,     // hipRise: 그 사이 몸통이 10° 이상 더 앞으로
+  hipRiseMinMove: 0.02,   // hipRise: 엉덩이 상승량 최소치(몸통 길이 비율) — 노이즈 방지
+  swayFrac: 0.06,         // torsoSway: 어깨 중심 x 또는 z 이동 폭 ≥ 몸통 길이의 6%
+  swayCorr: 0.5,          // torsoSway: 다리 벌림 각과의 |상관| ≥ 0.5 이면 '다리와 같이 움직임'
+  romShortFrac: 0.6,      // romShort: 세트 관측 ROM(obsMin~obsMax) < 종목 기준선 ROM × 0.6
+  romShortScanFrac: 0.45, // romShort: 기준선 없이 스캔 가동범위를 쓸 때는 더 느슨하게 (스캔은 최대 가동범위라 정상 반복도 60% 근처)
+};
+const REPORT_ONLY = ["kneeFwd","romShort"]; // 플래그·감점·음성 큐 없음 — 리포트 전용 (실시간 체크 칩에도 안 보임)
 const labelFor = c => (EX.joint === "thighs" && c === "lockout") ? "끝까지 벌림" : (EX.joint === "thighs" && c === "hip") ? "골반 고정" : CHECK_LABEL[c];
 let EX = EXERCISES[0];
 
@@ -296,7 +316,7 @@ function applyExercise(id) {
   $("holdField").hidden = !EX.holdSec;
   if (EX.holdSec) { $("holdTh").value = EX.holdSec; $("holdVal").textContent = EX.holdSec + "초"; }
   $("camHint").textContent = "📷 " + EX.cam; $("camHint0").textContent = "📷 " + EX.cam;
-  checksEl.innerHTML = EX.checks.map(c => `<div class="chk" id="chk-${c}">${labelFor(c)}</div>`).join("");
+  checksEl.innerHTML = EX.checks.filter(c => !REPORT_ONLY.includes(c)).map(c => `<div class="chk" id="chk-${c}">${labelFor(c)}</div>`).join("");
   $("tip").textContent = EX.tip || ""; $("tip").hidden = !EX.tip;
   $("tip0").textContent = EX.tip || ""; $("tip0").hidden = !EX.tip;
   resetSet(); setNo = 1;
@@ -597,6 +617,78 @@ function paintAuto() {
   if (t.src !== "수동") { downVal.textContent = t.low.toFixed(0) + "°"; upVal.textContent = t.high.toFixed(0) + "°"; }
 }
 
+// ═══════════ 공통 로직 체크 (pelvis / hipRise / torsoSway / kneeFwd) ═══════════
+// 매 프레임: 반복 r에 시계열(trace) 누적. 기울기·y 값은 반복 안에서 EMA(0.5)로 한 번 더 평활
+function trackCommon(r, angle, f, now) {
+  const tr = r.trace || (r.trace = []), sm = r.sm || (r.sm = {});
+  const ema = (k, v) => (sm[k] = sm[k] == null ? v : sm[k] * 0.5 + v * 0.5);
+  const s = { t: now, ang: angle };
+  if (f.tilt != null) { s.tilt = ema("tilt", f.tilt); s.hipY = ema("hipY", f.hip.y); s.shY = ema("shY", f.shoulderY); }
+  if (f.torso) r.torso = f.torso; // 이 반복의 몸통 길이 (전역 torsoLen 은 low 단계에서 만든 반복엔 안 갱신됨)
+  if (f.kneeAng != null) s.knee = ema("knee", f.kneeAng);
+  if (f.shMid) { s.shX = f.shMid.x; s.shZ = f.shMid.z; r.torsoBoth = f.torsoBoth; }
+  if (tr.length < 900) tr.push(s); // 30fps × 30초 상한
+  if (f.kneeFwd != null && angle <= r.min) r.kneeFwd = f.kneeFwd; // 바닥(최저각) 시점의 무릎 전진 — 리포트 전용
+}
+// 반복 종료 시: trace 로 공통 체크 판정 → flags 에 push (kneeFwd/romShort 는 플래그 없음)
+function commonFlags(r, flags) {
+  const T = COMMON_TH, tr = r.trace || [];
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  // 1) pelvis — 바닥 구간(최저 무릎각+band, 바닥 이후 250ms 까지)에서 몸통 기울기가
+  //    '바닥 구간에 들어선 직후' 기준보다 pelvisDeg 이상 더 꺾임. 무릎이 거의 안 움직이는데 상체만 꺾이면 = 허리 말림.
+  //    (내려오는 중 기준을 잡으면 정상 데드리프트의 자연스러운 기울기까지 잡혀서 오탐 → 바닥 구간 안에서만 비교)
+  if (EX.checks.includes("pelvis") && r.tBottom) {
+    const kneeOf = s => s.knee ?? (EX.joint === "knee" ? s.ang : null);
+    const all = tr.filter(s => s.tilt != null && kneeOf(s) != null);
+    if (all.length >= 6) {
+      // 바닥 시점은 tBottom(EMA 로 뒤로 밀림) 대신 무릎각 최저 샘플의 시각으로 잡음
+      let iMin = 0; for (let i = 1; i < all.length; i++) if (kneeOf(all[i]) <= kneeOf(all[iMin])) iMin = i;
+      const minK = kneeOf(all[iMin]), tCut = all[iMin].t + T.pelvisAfterMs;
+      const band = all.filter(s => s.t <= tCut && kneeOf(s) <= minK + T.pelvisKneeBand).map(s => s.tilt);
+      if (band.length >= T.pelvisRefN + 2) {
+        const ref = mean(band.slice(0, T.pelvisRefN));
+        r.pelvisDelta = Math.max(...band.slice(T.pelvisRefN)) - ref;
+        if (r.pelvisDelta >= T.pelvisDeg) flags.push("pelvis");
+      }
+    }
+  }
+  // 2) hipRise — 올라오는 첫 0.4초: 엉덩이 상승량 ≥ 어깨 상승량×1.6 이고 몸통이 10° 이상 더 앞으로
+  if (EX.checks.includes("hipRise") && r.tBottom) {
+    const w = tr.filter(s => s.tilt != null && s.t >= r.tBottom && s.t <= r.tBottom + T.hipRiseMs);
+    if (w.length >= 4) {
+      const a = w[0], b = w[w.length - 1], L = r.torso || torsoLen || 1;
+      const hipUp = (a.hipY - b.hipY) / L, shUp = (a.shY - b.shY) / L; // 화면 y는 아래로 증가 → 차이가 +면 올라감
+      r.hipRiseRatio = hipUp / Math.max(shUp, 1e-3);
+      if (hipUp > T.hipRiseMinMove && hipUp >= T.hipRiseRatio * Math.max(shUp, 0) && b.tilt - a.tilt >= T.hipRiseLeanDeg) flags.push("hipRise");
+    }
+  }
+  // 3) torsoSway — 어깨 중심 x 또는 z 이동 폭 ≥ 몸통 길이 6% 이고 다리 벌림 각과 동기(|상관|≥0.5)
+  if (EX.checks.includes("torsoSway")) {
+    const w = tr.filter(s => s.shX != null);
+    if (w.length >= 6) {
+      const L = r.torsoBoth || torsoLen || 1;
+      const rng = k => (Math.max(...w.map(s => s[k])) - Math.min(...w.map(s => s[k]))) / L;
+      const corr = k => {
+        const xs = w.map(s => s[k]), ys = w.map(s => s.ang), mx = mean(xs), my = mean(ys);
+        let sxy = 0, sxx = 0, syy = 0;
+        for (let i = 0; i < xs.length; i++) { const dx = xs[i] - mx, dy = ys[i] - my; sxy += dx * dy; sxx += dx * dx; syy += dy * dy; }
+        return sxy / (Math.sqrt(sxx * syy) || 1e-9);
+      };
+      r.sway = Math.max(rng("shX"), rng("shZ"));
+      if (["shX", "shZ"].some(k => rng(k) >= T.swayFrac && Math.abs(corr(k)) >= T.swayCorr)) flags.push("torsoSway");
+    }
+  }
+}
+// romShort(리포트 전용): 프로필 ROM (종목 기준선 우선, 없으면 스캔 가동범위 — 전체 ROM을 쓰는 스쿼트/데드리프트만) → 없으면 null
+function profileRom() {
+  const b = profile?.baselines?.[EX.id];
+  if (b && b.max - b.min > 10) return { rom: b.max - b.min, frac: COMMON_TH.romShortFrac };
+  const rom = profile?.rom || {};
+  if (EX.id === "squat" && rom.kneeMin != null && rom.kneeMax != null) return { rom: rom.kneeMax - rom.kneeMin, frac: COMMON_TH.romShortScanFrac };
+  if (EX.id === "deadlift" && rom.hipMinHinge != null && rom.hipMaxHinge != null) return { rom: rom.hipMaxHinge - rom.hipMinHinge, frac: COMMON_TH.romShortScanFrac };
+  return null;
+}
+
 // ── 정점 버티기형 (아웃타이, 힙쓰러스트): 시작(low) → 정점(high)에서 버팀 → 천천히 복귀(low) = 1회 ──
 function judgePeak(angle, conf, f) {
   const low = getLow(), high = getHigh(), now = performance.now();
@@ -607,9 +699,11 @@ function judgePeak(angle, conf, f) {
   r.min = Math.min(r.min, angle); r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++;
   if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
   if (f.arch != null) r.archMax = Math.max(r.archMax || 0, f.arch);
+  if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; if (EX.checks.includes("heel")) setChk("heel", f.heel > 0.08 ? "on" : "ok"); }
   setChk("hip", r.hipMove > 0.08 ? "on" : "");
   if (EX.lean && f.lean != null) setChk("lean", (EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min) ? "ok" : "on");
   if (EX.checks.includes("arch") && f.arch != null) setChk("arch", f.arch > 0.06 ? "on" : "");
+  trackCommon(r, angle, f, now);
 
   if (phase === "low") {
     if (angle >= high) { phase = "peak"; r.tPeak = now; r.holdMs = 0; r.kneeAtPeak = f.knee; speak("버티세요", "good"); }
@@ -649,18 +743,21 @@ function finishPeakRep(r, low, high, holdSec) {
   if (EX.checks.includes("tempo") && ret < 0.4) flags.push("tempo");
   if (EX.checks.includes("hip") && r.hipMove > 0.08) flags.push("hip");
   if (EX.checks.includes("arch") && (r.archMax || 0) > 0.06) flags.push("arch");
+  if (EX.checks.includes("heel") && r.heelSeen && (r.heelMax || 0) > 0.08) flags.push("heel");
   let feetMsg = null;
   if (EX.checks.includes("feet") && r.kneeAtPeak != null) { if (r.kneeAtPeak > 110) { flags.push("feet"); feetMsg = "발을 엉덩이 쪽으로 당기세요"; } else if (r.kneeAtPeak < 70) { flags.push("feet"); feetMsg = "발을 조금 앞으로 두세요"; } }
   const base = repList.slice(0, 2);
   if (EX.checks.includes("fatigue") && base.length === 2 && (base[0].max + base[1].max) / 2 - r.max > 8) flags.push("fatigue");
-  const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10 };
+  commonFlags(r, flags); // 공통 로직 (torsoSway 등)
+  const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10, heel:20, pelvis:25, hipRise:15, torsoSway:15 };
   const score = Math.max(0, 100 - flags.reduce((s, f) => s + (W[f] || 10), 0));
-  repList.push({ n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score });
+  repList.push({ n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score, kneeFwd: r.kneeFwd ?? null, sway: r.sway ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
-  const PRIO = ["arch","hip","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
+  const PRIO = ["arch","hip","heel","torsoSway","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
   const CUE = { arch:"허리 꺾지 마세요, 척추 그대로", hip:"골반 떨어지지 않게", lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요", feet: feetMsg,
-    slowReturn:"돌아올 때 더 천천히", hold:`정점에서 ${holdSec}초 버티세요`, lockout: EX.cueHigh, depth: EX.cueLow, tempo:"천천히", fatigue:"가동범위가 줄고 있어요" };
+    slowReturn:"돌아올 때 더 천천히", hold:`정점에서 ${holdSec}초 버티세요`, lockout: EX.cueHigh, depth: EX.cueLow, tempo:"천천히", fatigue:"가동범위가 줄고 있어요", heel:"뒤꿈치 누르세요",
+    torsoSway:"상체는 고정, 다리만 움직이세요" };
   speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
 }
 
@@ -701,7 +798,10 @@ function accumulate(r, angle, conf, f, now) {
   if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
   if (f.symDiff != null) r.symDiff = Math.max(r.symDiff, f.symDiff);
   if (f.valgus != null) r.valgus = Math.min(r.valgus || 9, f.valgus);
+  if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; }
   setChk("hip", r.hipMove > 0.08 ? "on" : ""); setChk("sym", r.symDiff > 15 ? "on" : ""); setChk("valgus", (r.valgus && r.valgus < 0.75) ? "on" : "");
+  if (EX.checks.includes("heel")) setChk("heel", f.heel == null ? "" : (f.heel > 0.08 ? "on" : "ok"));
+  trackCommon(r, angle, f, now);
 }
 function finishRep(r, low, high) {
   reps++; repsEl.textContent = reps;
@@ -713,6 +813,7 @@ function finishRep(r, low, high) {
   if (EX.checks.includes("hip") && r.hipMove > 0.08) flags.push("hip");
   if (EX.checks.includes("sym") && r.symDiff > 15) flags.push("sym");
   if (EX.checks.includes("valgus") && r.valgus && r.valgus < 0.75) flags.push("valgus");
+  if (EX.checks.includes("heel") && r.heelSeen && (r.heelMax || 0) > 0.08) flags.push("heel");
   const base = repList.slice(0, 2);
   if (EX.checks.includes("fatigue") && base.length === 2) {
     const b = (base[0].min + base[1].min) / 2, bmax = (base[0].max + base[1].max) / 2;
@@ -725,14 +826,18 @@ function finishRep(r, low, high) {
     const ok = EX.lean.dir === "back" ? leanAvg >= EX.lean.min : -leanAvg >= EX.lean.min;
     if (!ok) flags.push("lean");
   }
-  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20 }[f] || 10), 0));
-  repList.push({ n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score });
+  commonFlags(r, flags); // 공통 로직 (pelvis / hipRise / torsoSway)
+  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20, heel:20, pelvis:25, hipRise:15, torsoSway:15 }[f] || 10), 0));
+  repList.push({ n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score, kneeFwd: r.kneeFwd ?? null, pelvisDelta: r.pelvisDelta ?? null, sway: r.sway ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
-  const PRIO = ["hip","valgus","lean","hold","tempo","depth","lockout","sym","fatigue"];
+  const PRIO = ["pelvis","hip","hipRise","valgus","heel","torsoSway","lean","hold","tempo","depth","lockout","sym","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
   const th = EX.joint === "thighs";
   const CUE = { hip: th ? "골반 떨어지지 않게" : "엉덩이 붙이세요", valgus:"무릎 벌리세요", tempo: ecc < 0.5 ? (th ? "천천히 모으세요" : "천천히 내리세요") : "반동 쓰지 마세요", depth: EX.cueLow, lockout: EX.cueHigh, sym:"양쪽 같이 미세요", fatigue:"가동범위가 줄고 있어요",
-    hold: `벌린 채 ${EX.holdSec}초 버티세요`, lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요" };
+    hold: `벌린 채 ${EX.holdSec}초 버티세요`, lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요", heel:"뒤꿈치 누르세요",
+    pelvis:"바닥에서 허리가 말려요 — 조금 덜 내리거나 코어를 잡으세요",
+    hipRise: EX.id === "deadlift" ? "엉덩이가 먼저 떠요 — 바가 무릎 지날 때까지 엉덩이 높이 유지" : "엉덩이가 먼저 떠요 — 가슴과 엉덩이를 같이 올리세요",
+    torsoSway:"상체는 고정, 다리만 움직이세요" };
   speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
 }
 
@@ -751,13 +856,28 @@ function showReport() {
     : Math.round(100 - Math.max(0, avg(last.map(r => r.min)) - avg(first.map(r => r.min))) / Math.max(1, 180 - avg(first.map(r => r.min))) * 100);
   const tempo = avg(repList.map(r => r.ecc)).toFixed(1) + "s / " + avg(repList.map(r => r.con)).toFixed(1) + "s";
   const cnt = {}; repList.forEach(r => r.flags.forEach(f => cnt[f] = (cnt[f] || 0) + 1));
+  // kneeFwd(리포트 전용 정보): 바닥에서 무릎이 발끝을 넘은 정도(정강이 길이 %)의 평균. 측정 안 되면 KPI 생략
+  const kfList = repList.map(r => r.kneeFwd).filter(v => v != null);
+  const kneeFwdPct = EX.checks.includes("kneeFwd") && kfList.length ? Math.round(avg(kfList) * 100) : null;
   $("kpis").innerHTML = `
     <div class="kpi"><b>${n}회</b><span>반복</span></div>
     <div class="kpi"><b class="${avgScore >= 80 ? "ok" : "bad"}">${avgScore.toFixed(0)}</b><span>평균 점수</span></div>
     <div class="kpi"><b>${avgMin.toFixed(0)}°</b><span>${isTh ? (EX.joint === "thighs" ? "평균 최대 벌림" : "평균 최고 각도") : "평균 최저 각도"}</span></div>
     ${isTh ? `<div class="kpi"><b>${avg(repList.map(r => r.hold || 0)).toFixed(1)}s</b><span>평균 버티기</span></div><div class="kpi"><b>${avg(repList.map(r => r.ret || 0)).toFixed(1)}s</b><span>평균 복귀 시간</span></div>` : `<div class="kpi"><b style="font-size:16px">${tempo}</b><span>템포 ↓/↑</span></div>`}
-    ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${romKeep}%</b><span>가동범위 유지</span></div>` : ""}`;
-  const worst = Object.entries(cnt).sort((a, b) => b[1] - a[1]);
+    ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${romKeep}%</b><span>가동범위 유지</span></div>` : ""}
+    ${kneeFwdPct != null ? `<div class="kpi"><b>${kneeFwdPct >= 0 ? kneeFwdPct + "%" : "발끝 뒤"}</b><span>무릎 전진</span></div><div style="grid-column:1/-1;font-size:12px;color:var(--muted)">무릎이 발끝을 넘는 건 정상이에요 (발뒤꿈치가 붙어 있으면 OK)</div>` : ""}`;
+  // pelvis(허리 말림)는 위험도 높음 → 한 번이라도 나오면 advice 최우선
+  const worst = Object.entries(cnt).sort((a, b) => (a[0] === "pelvis" ? -1 : b[0] === "pelvis" ? 1 : b[1] - a[1]));
+  // romShort(리포트 전용): 세트 관측 ROM 이 프로필 ROM 의 60% 미만이면 advice 에 한 줄 추가
+  let romShortMsg = "";
+  if (EX.checks.includes("romShort")) {
+    const p = profileRom();
+    if (p && p.rom > 0) {
+      // 반복 기준(r.min/r.max)은 임계값을 넘어야만 세어져서 항상 70% 이상 → 세트 전체 관측 극값(obsMin/obsMax) 사용
+      const obs = (obsMin != null && obsMax != null) ? obsMax - obsMin : Math.max(...repList.map(r => r.max)) - Math.min(...repList.map(r => r.min));
+      if (obs < p.rom * p.frac) romShortMsg = `<br><b>${CHECK_LABEL.romShort}:</b> 오늘 가동범위가 평소의 ${Math.round(obs / p.rom * 100)}%예요 — 무게나 시작 각도 확인`;
+    }
+  }
   const ADVICE = {
     depth: "가동범위가 부족한 반복이 많아요. 무게를 5~10% 낮추고 기준선까지 내려가는 데 집중해 보세요.",
     lockout: "끝까지 펴지 않고 다음 반복으로 넘어가는 경향이 있어요. 위에서 잠깐 멈추세요.",
@@ -771,14 +891,18 @@ function showReport() {
     slowReturn: "돌아올 때 너무 빨라요. 이 동작은 돌아오는 구간이 핵심이에요. 버티면서 1초 이상 천천히, 다리뼈가 길어지는 느낌으로 돌아오세요.",
     arch: "최고점에서 허리가 꺾이고 있어요. 복부로 복압을 잡고 턱을 살짝 당긴 채, 엉덩이만 수평으로 올리세요. 척추 각도는 올라갈 때와 내려올 때 같아야 해요.",
     feet: "발 위치가 안 맞아요. 최고점에서 정강이가 수직이 되도록(무릎 바로 아래 뒤꿈치) 발 위치를 조정하세요.",
+    heel: "뒤꿈치가 떠요. 보통 발목 가동성이 부족하거나 무게중심이 앞으로 쏠릴 때 나타나요. 발바닥 전체로 누르고, 발 위치를 조금 높이거나(레그프레스) 발목 스트레칭을 해보세요.",
+    pelvis: "바닥에서 허리가 말려요(벗윙크). 허리 부담이 큰 패턴이에요. 말리기 직전 깊이까지만 내리거나, 복압을 잡고 코어를 고정한 채 내려가세요. 무게를 낮추는 것도 도움이 돼요.",
+    hipRise: EX.id === "deadlift" ? "올라올 때 엉덩이가 먼저 떠서 상체가 더 숙여져요(굿모닝 자세). 바가 무릎을 지날 때까지 엉덩이 높이를 유지하고, 가슴과 엉덩이가 같이 올라가게 하세요." : "올라올 때 엉덩이가 먼저 떠서 상체가 앞으로 쏠려요. 가슴과 엉덩이를 같은 속도로 올리고, 발바닥 전체로 바닥을 밀어보세요.",
+    torsoSway: "다리를 움직일 때 상체가 같이 흔들려요. 등받이에 상체를 고정하고 손잡이를 잡아 상체는 멈춘 채 다리만 움직이세요. 무게를 낮추면 고정이 쉬워져요.",
   };
   const th = !!EX.holdSec;
   const lineOf = r => th
     ? `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · 버티기 ${(r.hold || 0).toFixed(1)}s · 복귀 ${(r.ret || 0).toFixed(1)}s${r.lean != null ? ` · 상체 ${r.lean >= 0 ? "뒤" : "앞"}${Math.abs(r.lean).toFixed(0)}°` : ""}`
     : `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s`;
   $("advice").innerHTML = worst.length
-    ? `<b>가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${labelFor(f)} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}`
-    : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요." + (th ? " 무게보다 자세 유지가 우선이에요." : " 다음 세트는 무게를 조금 올려볼 수 있어요.");
+    ? `<b>가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${labelFor(f)} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}${romShortMsg}`
+    : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요." + (th ? " 무게보다 자세 유지가 우선이에요." : " 다음 세트는 무게를 조금 올려볼 수 있어요.") + romShortMsg;
   logEl.innerHTML = repList.map(r => {
     const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${labelFor(f)}</span>`).join("") : `<span class="tag ok">좋음</span>`;
     return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${lineOf(r)} · ${tags}</div>`;
@@ -831,11 +955,43 @@ function features(lm, side, wl) {
     if (up > 0.05) f.lean = Math.atan2(back, up) * 180 / Math.PI;
   }
   // 힙쓰러스트용: 허리 꺾임(엉덩이가 어깨-무릎 선보다 위로 솟음) + 정점 무릎 각도(발 위치)
+  // 뒤꿈치 뜸: 측면에서 뒤꿈치(29/30)가 발끝(31/32)보다 위로 올라간 정도를 정강이 길이로 정규화. 발이 안 보이면 null (체크 자동 꺼짐)
+  if (EX.checks.includes("heel")) {
+    const useR = side === "R";
+    const HE = useR ? lm[30] : lm[29], TO = useR ? lm[32] : lm[31], K = useR ? lm[LM.RK] : lm[LM.LK], A = useR ? lm[LM.RA] : lm[LM.LA];
+    if (HE.visibility > 0.5 && TO.visibility > 0.5 && A.visibility > 0.5) {
+      const shin = dist(K, A) || 1;
+      f.heel = (TO.y - HE.y) / shin; // +면 뒤꿈치가 발끝보다 위 (화면 y는 아래로 증가)
+    }
+  }
   if (EX.checks.includes("arch") || EX.checks.includes("feet")) {
     const K = side === "R" ? lm[LM.RK] : lm[LM.LK], A = side === "R" ? lm[LM.RA] : lm[LM.LA];
     const t = (H.x - S.x) / ((K.x - S.x) || 1e-6);
     if (t > 0.1 && t < 0.9) { const lineY = S.y + (K.y - S.y) * t; f.arch = (lineY - H.y) / (f.torso || 1); } // +면 엉덩이가 선 위로(화면 위) 솟음
     f.knee = angleAt(H, K, A);
+  }
+  // ── 공통 로직용 특징 (visibility ≤ CONF_TH 이면 해당 값 생략 → 체크 자동 skip) ──
+  // pelvis/hipRise: 몸통 기울기(2D, 어깨-골반 선이 수직에서 벗어난 절대각 °, 측면 뷰), 어깨 y, 무릎각
+  if (EX.checks.includes("pelvis") || EX.checks.includes("hipRise")) {
+    if (S.visibility > CONF_TH && H.visibility > CONF_TH) {
+      f.tilt = Math.atan2(Math.abs(S.x - H.x), Math.abs(H.y - S.y) || 1e-6) * 180 / Math.PI;
+      f.shoulderY = S.y;
+      const K = side === "R" ? lm[LM.RK] : lm[LM.LK], A = side === "R" ? lm[LM.RA] : lm[LM.LA];
+      if (K.visibility > CONF_TH && A.visibility > CONF_TH) f.kneeAng = angleAt(H, K, A);
+    }
+  }
+  // torsoSway: 어깨 중심의 x/z, 양쪽 평균 몸통 길이
+  if (EX.checks.includes("torsoSway") && lm[LM.LS].visibility > CONF_TH && lm[LM.RS].visibility > CONF_TH) {
+    f.shMid = { x: (lm[LM.LS].x + lm[LM.RS].x) / 2, z: ((lm[LM.LS].z ?? 0) + (lm[LM.RS].z ?? 0)) / 2 };
+    f.torsoBoth = (dist(lm[LM.LS], lm[LM.LH]) + dist(lm[LM.RS], lm[LM.RH])) / 2 || 1;
+  }
+  // kneeFwd(리포트 전용): 무릎 x가 발끝(31/32) x를 넘은 정도 / 정강이 길이. 발 방향은 뒤꿈치(29/30)→발끝 x 부호로 결정
+  if (EX.checks.includes("kneeFwd")) {
+    const useR = side === "R";
+    const K = useR ? lm[LM.RK] : lm[LM.LK], A = useR ? lm[LM.RA] : lm[LM.LA], HE = useR ? lm[30] : lm[29], TO = useR ? lm[32] : lm[31];
+    if (K.visibility > CONF_TH && A.visibility > CONF_TH && HE.visibility > CONF_TH && TO.visibility > CONF_TH && Math.abs(TO.x - HE.x) > 0.01) {
+      f.kneeFwd = (K.x - TO.x) * Math.sign(TO.x - HE.x) / (dist(K, A) || 1); // +면 무릎이 발끝 앞
+    }
   }
   const J = JOINT[EX.joint];
   if (J.custom) return f;
@@ -952,7 +1108,18 @@ function loop() {
 const isPhone = /Android|iPhone|iPad/i.test(navigator.userAgent);
 let facing = isPhone ? "environment" : "user", starting = false, currentStream = null;
 $("preFacing").textContent = (facing === "user" ? "전면" : "후면") + " 카메라로 시작 · 눌러서 변경";
+var lens = "normal";
+try { lens = localStorage.getItem("formcoach.lens") || "normal"; } catch {}
 $("preFacing").onclick = () => setFacing(facing === "user" ? "environment" : "user");
+// 시작 화면: 폰 후면이면 렌즈 선택도 함께
+{
+  const b = document.createElement("button"); b.className = "ghost"; b.id = "preLens"; b.style.fontSize = "14px";
+  $("preFacing").insertAdjacentElement("afterend", b);
+  const paint = () => { b.hidden = !(isPhone && facing === "environment"); b.textContent = (lens === "wide" ? "📷 후면 광각(0.5×) 사용 중" : "📷 후면 기본 렌즈 사용 중") + " · 눌러서 변경"; };
+  b.onclick = () => { setLens(lens === "wide" ? "normal" : "wide"); paint(); };
+  const ob = new MutationObserver(paint); ob.observe($("preFacing"), { childList: true, characterData: true, subtree: true });
+  paint();
+}
 
 async function listCams() {
   try {
@@ -964,13 +1131,22 @@ async function listCams() {
 async function openCamera(opts) {
   if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
   const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
-  const tries = opts.deviceId
-    ? [{ ...base, deviceId: { exact: opts.deviceId } }]
-    : [{ ...base, facingMode: { exact: opts.facing } }, { ...base, facingMode: { ideal: opts.facing } }];
+  let tries;
+  if (opts.deviceId) tries = [{ ...base, deviceId: { exact: opts.deviceId } }];
+  else if (opts.facing === "environment" && lens === "wide") {
+    // 광각: 1) 라벨로 찾기 2) 줌 0.5 지원 카메라 3) 일반 후면
+    const wideId = await findWideCameraId();
+    tries = wideId ? [{ ...base, deviceId: { exact: wideId } }] : [];
+    tries.push({ ...base, facingMode: { exact: "environment" }, zoom: 0.5 }, { ...base, facingMode: { exact: "environment" } }, { ...base, facingMode: { ideal: "environment" } });
+  } else tries = [{ ...base, facingMode: { exact: opts.facing } }, { ...base, facingMode: { ideal: opts.facing } }];
   tries.push(true);
   let stream, err;
   for (const vc of tries) { try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); break; } catch (e) { err = e; } }
   if (!stream) throw err;
+  // 광각 요청인데 줌 가능한 카메라면 0.5배로
+  if (opts.facing === "environment" && lens === "wide") {
+    try { const tr = stream.getVideoTracks()[0], cap = tr.getCapabilities?.() || {}; if (cap.zoom && cap.zoom.min < 1) await tr.applyConstraints({ advanced: [{ zoom: Math.max(cap.zoom.min, 0.5) }] }); } catch {}
+  }
   currentStream = stream;
   try {
     const tr = stream.getVideoTracks()[0], s = tr.getSettings(), lbl = (tr.label || "").toLowerCase();
@@ -1007,7 +1183,36 @@ camSel.onchange = async () => { if (running && !starting) { starting = true; try
 
 // 폰: 전면/후면 버튼만, PC: 카메라 목록만
 $("facingField").hidden = !isPhone; $("camSelField").hidden = isPhone;
-function paintFacing() { $("faceBack").className = "ghost" + (facing === "environment" ? " primary" : ""); $("faceFront").className = "ghost" + (facing === "user" ? " primary" : ""); $("faceBack").classList.toggle("ghost", facing !== "environment"); $("faceFront").classList.toggle("ghost", facing !== "user"); }
+// ── 렌즈(후면 기본/광각) ──
+async function findWideCameraId() {
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    const byLabel = devs.find(d => /ultra|wide|광각|0\.5|uw/i.test(d.label) && !/front|user|전면/i.test(d.label));
+    if (byLabel) return byLabel.deviceId;
+    // 라벨이 없으면 후면 카메라들 중 줌 최소값이 1 미만인 것을 찾음 (권한 허용 후에만 가능)
+    for (const d of devs) {
+      if (/front|user|전면/i.test(d.label)) continue;
+      try { const st = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: d.deviceId } } }); const cap = st.getVideoTracks()[0].getCapabilities?.() || {}; st.getTracks().forEach(t => t.stop()); if (cap.zoom && cap.zoom.min < 1) return d.deviceId; } catch {}
+    }
+  } catch {}
+  return null;
+}
+function paintLens() {
+  $("lensRow").hidden = !(isPhone && facing === "environment");
+  $("lensInfo").hidden = $("lensRow").hidden;
+  $("lensNormal").classList.toggle("primary", lens === "normal"); $("lensNormal").classList.toggle("ghost", lens !== "normal");
+  $("lensWide").classList.toggle("primary", lens === "wide"); $("lensWide").classList.toggle("ghost", lens !== "wide");
+}
+async function setLens(l) {
+  lens = l; try { localStorage.setItem("formcoach.lens", l); } catch {}
+  paintLens();
+  if (!running || starting || facing !== "environment") return;
+  starting = true; try { await openCamera({ facing }); toast(l === "wide" ? "광각 렌즈 (사람을 가운데에)" : "기본 렌즈"); } catch { toast("렌즈 전환 실패"); } finally { starting = false; }
+}
+$("lensNormal").onclick = () => setLens("normal"); $("lensWide").onclick = () => setLens("wide");
+
+function paintFacing() {
+  paintLens(); $("faceBack").className = "ghost" + (facing === "environment" ? " primary" : ""); $("faceFront").className = "ghost" + (facing === "user" ? " primary" : ""); $("faceBack").classList.toggle("ghost", facing !== "environment"); $("faceFront").classList.toggle("ghost", facing !== "user"); }
 async function setFacing(f) {
   if (starting) return;
   facing = f; paintFacing();
