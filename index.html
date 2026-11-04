@@ -7,6 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
+<!-- APP_VER: 11.04-7 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -163,7 +164,7 @@
   <div class="grab"></div>
   <header><h2>설정</h2><button class="close" id="closeSettings" aria-label="닫기">✕</button></header>
   <div class="body">
-    <div class="section">내 몸 프로필</div>
+    <div class="section">내 몸 프로필 <span id="appVer" style="float:right;font-weight:400;color:var(--muted)"></span></div>
     <div id="profView" style="display:grid;gap:8px">
       <div id="profSummary" style="font-size:13px;color:var(--muted)">아직 스캔하지 않았어요.</div>
       <div class="prof" id="profGrid" hidden></div>
@@ -213,7 +214,7 @@
 <!-- 리포트 시트 -->
 <div class="sheet" id="reportSheet" role="dialog" aria-label="세트 리포트">
   <div class="grab"></div>
-  <header><h2 id="reportTitle">세트 리포트</h2><button class="close" id="closeReport" aria-label="닫기">✕</button></header>
+  <header><h2 id="reportTitle">세트 리포트</h2><span id="appVer2" style="font-size:11px;color:var(--muted);margin-right:8px"></span><button class="close" id="closeReport" aria-label="닫기">✕</button></header>
   <div class="body">
     <div class="rtabs" id="repTabs"><button class="on" id="tabLive">실시간</button><button id="tabPrec" disabled>정밀</button></div>
     <div class="cmp" id="precCmp" hidden></div>
@@ -313,6 +314,8 @@ var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 �
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
+const APP_VER = "11.04-7"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+$("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
 let recSupported = typeof MediaRecorder !== "undefined";
