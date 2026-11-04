@@ -86,6 +86,13 @@
   .score { font-weight: 800; min-width: 32px; }
   .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(255,92,92,.15); color: var(--warn); }
   .tag.ok { background: rgba(61,220,132,.15); color: var(--good); }
+  .rtabs { display: flex; gap: 6px; } .rtabs button { flex: 1; padding: 8px; font-size: 13px; border-radius: 8px; border: 1px solid var(--line); background: #222932; color: var(--muted); }
+  .rtabs button.on { background: var(--accent); color: #111; border-color: var(--accent); font-weight: 700; } .rtabs button:disabled { opacity: .45; }
+  .precbar { font-size: 13px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; }
+  .precbar .fill { height: 6px; border-radius: 3px; background: var(--accent); width: 0%; transition: width .3s; }
+  .precbar .track { height: 6px; border-radius: 3px; background: #3a4450; overflow: hidden; }
+  .cmp { font-size: 13px; line-height: 1.5; color: var(--muted); } .cmp b { color: var(--fg); }
+  .diff { font-size: 11px; color: var(--muted); }
   .ok { color: var(--good); } .bad { color: var(--warn); }
   .scanui { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 14px 16px; background: linear-gradient(transparent, rgba(0,0,0,.85) 30%); display: grid; gap: 8px; text-align: center; z-index: 5; }
   .scanstep { font-size: 12px; color: var(--accent); letter-spacing: .08em; }
@@ -190,6 +197,7 @@
       <div id="lensInfo" style="font-size:12px;color:var(--muted)">광각은 가까이 세워도 전신이 들어와요. 가장자리는 휘어지니 사람을 화면 가운데에 두세요.</div></div>
     <div class="field" id="camSelField"><span>카메라 선택 (PC)</span><select id="camSel"></select></div>
     <div class="toggle"><span>화면 좌우 반전</span><button class="sw" id="flipSw" aria-label="좌우 반전"></button></div>
+    <div class="toggle"><span>세트 영상 녹화 <small style="color:var(--muted)">(정밀 분석용 · 기기 안에만, 다음 세트 시작 시 삭제)</small></span><button class="sw on" id="recSw" aria-label="세트 영상 녹화"></button></div>
     <div class="section">피드백</div>
     <div class="toggle"><span>음성 안내</span><button class="sw on" id="voiceSw" aria-label="음성 안내"></button></div>
     <button class="ghost" id="voiceTest">🔊 음성 테스트</button>
@@ -207,11 +215,15 @@
   <div class="grab"></div>
   <header><h2 id="reportTitle">세트 리포트</h2><button class="close" id="closeReport" aria-label="닫기">✕</button></header>
   <div class="body">
+    <div class="rtabs" id="repTabs"><button class="on" id="tabLive">실시간</button><button id="tabPrec" disabled>정밀</button></div>
+    <div class="cmp" id="precCmp" hidden></div>
     <div class="kpis" id="kpis"></div>
     <canvas id="chart"></canvas>
     <div class="advice" id="advice"></div>
     <div class="section">반복별 기록</div>
     <div class="log" id="log"></div>
+    <div class="precbar" id="precBar" hidden><div id="precMsg">정밀 분석 준비 중…</div><div class="track"><div class="fill" id="precFill"></div></div><button class="ghost" id="precCancel" style="font-size:13px">취소</button></div>
+    <button class="ghost" id="precBtn">🔬 정밀 분석</button>
     <button class="ghost" id="saveBaseBtn">⭐ 이 세트를 내 기준선으로 저장</button>
     <button class="primary" id="nextSetBtn">다음 세트 시작</button>
   </div>
@@ -275,7 +287,9 @@ const COMMON_TH = {
   hipRiseMinMove: 0.02,   // hipRise: 엉덩이 상승량 최소치(몸통 길이 비율) — 노이즈 방지
   swayFrac: 0.06,         // torsoSway: 어깨 중심 x 또는 z 이동 폭 ≥ 몸통 길이의 6%
   swayCorr: 0.5,          // torsoSway: 다리 벌림 각과의 |상관| ≥ 0.5 이면 '다리와 같이 움직임'
-  backRoundDeg: 15,       // backRound: 귀-어깨-엉덩이 각(등 윗부분·목 라인)이 반복 시작 대비 이만큼 이상 꺾이면 플래그
+  backRoundDeg: 25,       // backRound: (15°는 시선 앞에 둔 정상 데드리프트에서 15/18회 오탐 — 11/4 실측)
+  backRoundMs: 300,       // backRound: 이 시간 이상 지속될 때만 (한 프레임 튐 무시)
+  //                      // backRound: 귀-어깨-엉덩이 각(등 윗부분·목 라인)이 반복 시작 대비 이만큼 이상 꺾이면 플래그
   backRoundRefN: 3,       // backRound: 기준 = 반복 시작 첫 3 샘플 평균
   romShortFrac: 0.6,      // romShort: 세트 관측 ROM(obsMin~obsMax) < 종목 기준선 ROM × 0.6
   romShortScanFrac: 0.45, // romShort: 기준선 없이 스캔 가동범위를 쓸 때는 더 느슨하게 (스캔은 최대 가동범위라 정상 반복도 60% 근처)
@@ -297,6 +311,16 @@ const win = [];
 const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
+// 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
+let clock = () => performance.now(), quiet = false;
+const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
+let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
+let recSupported = typeof MediaRecorder !== "undefined";
+let recorder = null, recChunks = [], recT0 = 0, recTimer = null, recState = null; // recState: null(대기) | "rec" | "done"
+let lastSetVideo = null;   // { blob, mime, tStart, ex, setNo } — 세트 1개만 보관
+let precReport = null;     // { repList, conf, frames, model, durationSec, obs }
+let repView = "live";      // 리포트 시트 탭: "live" | "prec"
+let precBusy = false, precCancel = false;
 
 // ───────── 시트 / 토스트 ─────────
 const scrim = $("scrim");
@@ -305,7 +329,7 @@ function closeSheets() { document.querySelectorAll(".sheet").forEach(s => s.clas
 scrim.onclick = closeSheets;
 $("settingsBtn").onclick = () => openSheet("settings");
 $("closeSettings").onclick = closeSheets; $("closeReport").onclick = closeSheets;
-let toastT; function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1600); }
+let toastT; function toast(msg) { if (quiet) return; const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 1600); }
 
 // ───────── 종목 ─────────
 for (const sel of [exSel, exSel0]) EXERCISES.forEach(e => { const o = document.createElement("option"); o.value = e.id; o.textContent = e.name; sel.append(o); });
@@ -331,7 +355,7 @@ applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -370,6 +394,7 @@ function unlockAudio() { // 첫 터치에서 음성·오디오 권한 열기 (iO
   if ("speechSynthesis" in window) { try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch {} }
 }
 function speak(text, cls) {
+  if (quiet) return;
   cueEl.textContent = text; cueEl.className = "cue " + cls;
   const now = performance.now();
   if (!voice || now - lastSpeak < 1200) return;
@@ -387,8 +412,8 @@ function speak(text, cls) {
     }, 60);
   } catch { beep(cls); }
 }
-function hint(text, cls) { cueEl.textContent = text; cueEl.className = "cue " + cls; }
-function setChk(name, state) { const el = $("chk-" + name); if (el) el.className = "chk" + (state === "on" ? " on" : state === "ok" ? " ok" : ""); }
+function hint(text, cls) { if (quiet) return; cueEl.textContent = text; cueEl.className = "cue " + cls; }
+function setChk(name, state) { if (quiet) return; const el = $("chk-" + name); if (el) el.className = "chk" + (state === "on" ? " on" : state === "ok" ? " ok" : ""); }
 
 // ───────── 기하 ─────────
 function angleAt(a, b, c) {
@@ -569,7 +594,9 @@ function learnRange(angle) {
   if (angle > obsMax) obsMax = angle;
 }
 const autoReady = () => autoMode && obsMin != null && (obsMax - obsMin) >= AUTO_MIN_RANGE && obsFrames > 20;
+var thOverride = null; // 정밀 재분석 중: 녹화 종료 시점의 판정 기준 스냅샷 (리뷰 #3 — 리포트 직후 기준선 자동저장으로 기준이 바뀌는 문제)
 function thresholds() {
+  if (thOverride) return thOverride;
   const b = profile?.baselines?.[EX.id];
   if (b && b.max - b.min > 10) { const r = b.max - b.min; return { low: b.min + r * 0.15, high: b.max - r * 0.15, src: "내 기준선" }; }
   const rom = profile?.rom || {};
@@ -588,15 +615,15 @@ function thresholds() {
 const getLow = () => thresholds().low, getHigh = () => thresholds().high;
 function paintSrc() { const t = thresholds(); $("thSrc").textContent = `현재 판정 기준: ${t.src} (${t.low.toFixed(0)}° / ${t.high.toFixed(0)}°)`; }
 function resetAuto() { obsMin = obsMax = null; obsFrames = 0; }
-function saveBaseline(auto) {
-  if (!repList.length) return;
-  const good = repList.filter(r => r.score >= 80), use = good.length >= 2 ? good : repList;
+function saveBaseline(auto, list = repList) { // list: 정밀 탭에서는 precReport.repList
+  if (!list.length) return;
+  const good = list.filter(r => r.score >= 80), use = good.length >= 2 ? good : list;
   const med = arr => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
   profile = profile || { baselines: {} }; profile.baselines = profile.baselines || {};
   profile.baselines[EX.id] = { min: med(use.map(r => r.min)), max: med(use.map(r => r.max)), hold: med(use.map(r => r.hold || 0)), ecc: med(use.map(r => r.ecc || 0)), con: med(use.map(r => r.con || 0)), date: Date.now(), n: use.length };
-  saveProfile(); paintProfile(); paintSrc(); toast(auto ? `${EX.name} 기준선 자동 저장됨 (${use.length}회)` : `${EX.name} 기준선 저장 (${use.length}회 기준)`);
+  saveProfile(); paintProfile(); paintSrc(); toast(auto ? `${EX.name} 기준선 자동 저장됨 (${use.length}회)` : `${EX.name} 기준선 저장 (${use.length}회 기준)${list !== repList ? " · 정밀 결과 기준" : ""}`);
 }
-$("saveBaseBtn").onclick = () => saveBaseline(false);
+$("saveBaseBtn").onclick = () => saveBaseline(false, repView === "prec" && precReport ? precReport.repList : repList);
 
 // 백업/복원 (카카오톡 등 인앱 브라우저는 저장소가 지워질 수 있음)
 $("profCopy").onclick = async () => {
@@ -673,8 +700,13 @@ function commonFlags(r, flags) {
     const w = tr.filter(s => s.neck != null);
     if (w.length >= T.backRoundRefN + 3) {
       const ref = neckStand ?? mean(w.slice(0, T.backRoundRefN).map(s => s.neck)); // 선 자세 기준이 있으면 그걸로 (반복은 이미 숙이기 시작한 뒤 생성되므로)
-      r.backRoundDelta = ref - Math.min(...w.slice(T.backRoundRefN).map(s => s.neck));
-      if (r.backRoundDelta >= T.backRoundDeg) flags.push("backRound");
+      const rest = w.slice(T.backRoundRefN);
+      r.backRoundDelta = ref - Math.min(...rest.map(s => s.neck));
+      // 지속 시간: 기준 대비 backRoundDeg 이상 꺾인 상태가 연속 backRoundMs 이상
+      let run = 0, runMax = 0;
+      for (let i = 1; i < rest.length; i++) { if (ref - rest[i].neck >= T.backRoundDeg) { run += rest[i].t - rest[i - 1].t; runMax = Math.max(runMax, run); } else run = 0; }
+      r.backRoundMs = runMax;
+      if (runMax >= T.backRoundMs) flags.push("backRound");
     }
   }
   // 3) torsoSway — 어깨 중심 x 또는 z 이동 폭 ≥ 몸통 길이 6% 이고 다리 벌림 각과 동기(|상관|≥0.5)
@@ -706,7 +738,7 @@ function profileRom() {
 
 // ── 정점 버티기형 (아웃타이, 힙쓰러스트): 시작(low) → 정점(high)에서 버팀 → 천천히 복귀(low) = 1회 ──
 function judgePeak(angle, conf, f) {
-  const low = getLow(), high = getHigh(), now = performance.now();
+  const low = getLow(), high = getHigh(), now = clock();
   const holdSec = +($("holdTh")?.value || EX.holdSec);
   if (phase === null) { phase = angle > (low + high) / 2 ? "peak" : "low"; return; }
   if (!cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
@@ -745,7 +777,7 @@ function judgePeak(angle, conf, f) {
   r.prevAngle = angle; r.prevT = now;
 }
 function finishPeakRep(r, low, high, holdSec) {
-  reps++; repsEl.textContent = reps;
+  reps++; if (!quiet) repsEl.textContent = reps;
   const hold = r.holdMs / 1000;
   const ret = r.tReturn ? (r.tEnd - r.tReturn) / 1000 : 0;
   const flags = [];
@@ -778,7 +810,7 @@ function finishPeakRep(r, low, high, holdSec) {
 
 function judge(angle, conf, f) {
   if (EX.holdSec) return judgePeak(angle, conf, f);
-  const low = getLow(), high = getHigh(), now = performance.now();
+  const low = getLow(), high = getHigh(), now = clock();
   if (phase === null) { phase = angle > (low + high) / 2 ? "high" : "low"; return; }
   if (phase === "high") {
     if (angle < high - 10 && !cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
@@ -819,7 +851,7 @@ function accumulate(r, angle, conf, f, now) {
   trackCommon(r, angle, f, now);
 }
 function finishRep(r, low, high) {
-  reps++; repsEl.textContent = reps;
+  reps++; if (!quiet) repsEl.textContent = reps;
   const ecc = (r.tBottom - r.tStart) / 1000, con = (r.tEnd - r.tBottom) / 1000;
   const flags = [];
   if (r.min > low) flags.push("depth");
@@ -861,7 +893,34 @@ $("endSetBtn").onclick = showReport;
 $("nextSetBtn").onclick = () => { setNo++; resetSet(); closeSheets(); toast(`${setNo}세트 시작`); speak(`${setNo}세트`, "info"); };
 function showReport() {
   if (!repList.length) { toast("기록된 반복이 없어요"); return; }
-  $("reportTitle").textContent = `${EX.name} · ${setNo}세트 리포트`;
+  stopRecording(); // 세트 종료 → 영상 보관 (정밀 분석용)
+  repView = precReport ? "prec" : "live";
+  renderReport(repView === "prec" ? precReport.repList : repList, { mode: repView });
+  // 기준선 자동 저장: 아직 없고, 80점 이상 반복이 3회 이상이면 (실시간 결과 기준)
+  const goodN = repList.filter(r => r.score >= 80).length;
+  if (!profile?.baselines?.[EX.id] && goodN >= 3) { saveBaseline(true); }
+  paintPrecBtn();
+  openSheet("reportSheet");
+}
+// 리포트 그리기 — 실시간(repList) / 정밀(precReport.repList) 공용. meta.mode: "live" | "prec"
+const liveReps = () => repList; // renderReport 안에서는 repList 가 list 로 가려지므로 실시간 목록은 이걸로
+function renderReport(list, meta = { mode: "live" }) {
+  const repList = list, prec = meta.mode === "prec";
+  $("reportTitle").textContent = `${EX.name} · ${setNo}세트 리포트${prec ? " · 정밀" : ""}`;
+  $("tabLive").classList.toggle("on", !prec); $("tabPrec").classList.toggle("on", prec); $("tabPrec").disabled = !precReport;
+  // 정밀 탭 머리: 실시간 vs 정밀 비교 한 줄
+  if (prec && precReport) {
+    const av = a => a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0, pc = v => Math.round(v * 100);
+    const L = liveReps(), P = precReport.repList;
+    const lc = av(L.map(r => r.conf).filter(v => v != null)), pcf = precReport.conf || av(P.map(r => r.conf).filter(v => v != null));
+    let msg = `실시간 <b>${L.length}회 · 평균 ${av(L.map(r => r.score)).toFixed(0)}점</b> → 정밀 <b>${P.length}회 · 평균 ${av(P.map(r => r.score)).toFixed(0)}점</b> (인식 신뢰도 ${pc(lc)}% → ${pc(pcf)}%)`;
+    const thDiff = precReport.liveThSrc && precReport.thSrc && precReport.liveThSrc !== precReport.thSrc && !(precReport.thSrc === "녹화 당시 기준");
+    if (L.length !== P.length) msg += thDiff
+      ? `<br>횟수가 ${Math.abs(L.length - P.length)}회 달라요 — 판정 기준이 달라서(실시간 ${precReport.liveThSrc} → 정밀 ${precReport.thSrc}) 생긴 차이일 수 있어요`
+      : `<br>정밀 분석이 ${Math.abs(L.length - P.length)}회를 다르게 셌어요 — 정밀 쪽이 더 정확해요`;
+    msg += `<br><span style="font-size:11px">heavy 모델 · ${precReport.frames}프레임 · ${precReport.durationSec.toFixed(0)}초 영상 · 양방향 평활 · 기준 ${precReport.thSrc || "-"} ${precReport.thLow != null ? `(${precReport.thLow.toFixed(0)}°/${precReport.thHigh.toFixed(0)}°)` : ""}</span>`;
+    $("precCmp").innerHTML = msg; $("precCmp").hidden = false;
+  } else $("precCmp").hidden = true;
   const n = repList.length, avg = a => a.reduce((s, v) => s + v, 0) / a.length;
   const isTh = !!EX.holdSec; // 정점 버티기형은 '최대 각도'가 핵심
   const avgScore = avg(repList.map(r => r.score)), avgMin = isTh ? avg(repList.map(r => r.max)) : avg(repList.map(r => r.min));
@@ -890,7 +949,8 @@ function showReport() {
     const p = profileRom();
     if (p && p.rom > 0) {
       // 반복 기준(r.min/r.max)은 임계값을 넘어야만 세어져서 항상 70% 이상 → 세트 전체 관측 극값(obsMin/obsMax) 사용
-      const obs = (obsMin != null && obsMax != null) ? obsMax - obsMin : Math.max(...repList.map(r => r.max)) - Math.min(...repList.map(r => r.min));
+      const ob = meta.obs || (prec && precReport ? precReport.obs : null) || { min: obsMin, max: obsMax };
+      const obs = (ob.min != null && ob.max != null) ? ob.max - ob.min : Math.max(...repList.map(r => r.max)) - Math.min(...repList.map(r => r.min));
       if (obs < p.rom * p.frac) romShortMsg = `<br><b>${CHECK_LABEL.romShort}:</b> 오늘 가동범위가 평소의 ${Math.round(obs / p.rom * 100)}%예요 — 무게나 시작 각도 확인`;
     }
   }
@@ -916,19 +976,23 @@ function showReport() {
   const th = !!EX.holdSec;
   const lineOf = r => th
     ? `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · 버티기 ${(r.hold || 0).toFixed(1)}s · 복귀 ${(r.ret || 0).toFixed(1)}s${r.lean != null ? ` · 상체 ${r.lean >= 0 ? "뒤" : "앞"}${Math.abs(r.lean).toFixed(0)}°` : ""}`
-    : `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s`;
+    : `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s${r.backRoundDelta != null ? ` · 등 ${r.backRoundDelta.toFixed(0)}°` : ""}${r.pelvisDelta != null ? ` · 허리 ${r.pelvisDelta.toFixed(0)}°` : ""}`;
   $("advice").innerHTML = worst.length
     ? `<b>가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${labelFor(f)} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}${romShortMsg}`
     : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요." + (th ? " 무게보다 자세 유지가 우선이에요." : " 다음 세트는 무게를 조금 올려볼 수 있어요.") + romShortMsg;
+  const liveByN = prec ? Object.fromEntries(liveReps().map(r => [r.n, r])) : null;
   logEl.innerHTML = repList.map(r => {
     const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${labelFor(f)}</span>`).join("") : `<span class="tag ok">좋음</span>`;
-    return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${lineOf(r)} · ${tags}</div>`;
+    let diff = "";
+    if (prec) { // 실시간과 플래그가 다른 반복은 차이 표기
+      const lv = liveByN[r.n];
+      const same = lv && lv.flags.length === r.flags.length && lv.flags.every(f => r.flags.includes(f));
+      if (!lv) diff = ` <span class="diff">(실시간: 없음)</span>`;
+      else if (!same) diff = ` <span class="diff">(실시간: ${lv.flags.length ? lv.flags.map(labelFor).join("·") : "좋음"})</span>`;
+    }
+    return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${lineOf(r)} · ${tags}${diff}</div>`;
   }).join("");
-  // 기준선 자동 저장: 아직 없고, 80점 이상 반복이 3회 이상이면
-  const goodN = repList.filter(r => r.score >= 80).length;
-  if (!profile?.baselines?.[EX.id] && goodN >= 3) { saveBaseline(true); }
-  $("saveBaseBtn").textContent = profile?.baselines?.[EX.id] ? "⭐ 이 세트로 기준선 갱신" : "⭐ 이 세트를 내 기준선으로 저장";
-  openSheet("reportSheet");
+  $("saveBaseBtn").textContent = (profile?.baselines?.[EX.id] ? "⭐ 이 세트로 기준선 갱신" : "⭐ 이 세트를 내 기준선으로 저장") + (prec ? " (정밀 기준)" : "");
   requestAnimationFrame(() => isTh ? drawChart(repList.map(r => r.max), getHigh(), v => v >= getHigh(), EX.joint === "thighs" ? "반복별 최대 벌림 각도 (높을수록 많이 벌림)" : "반복별 최고 각도 (기준 위면 끝까지 올림)") : drawChart(repList.map(r => r.min), getLow(), v => v <= getLow(), "반복별 최저 각도 (낮을수록 깊게)"));
 }
 function drawChart(ys, ref, okFn, title) {
@@ -1020,7 +1084,7 @@ function features(lm, side, wl) {
   const vL = (lm[J.L[0]].visibility + lm[J.L[1]].visibility + lm[J.L[2]].visibility) / 3;
   const vR = (lm[J.R[0]].visibility + lm[J.R[1]].visibility + lm[J.R[2]].visibility) / 3;
   // 좌우 대칭·무릎 모임은 정면(양쪽 어깨가 벌어져 보임)에서만 — 측면에선 반대쪽이 가려져 추정값이라 의미 없음
-  const frontal = Math.abs(lm[LM.LS].x - lm[LM.RS].x) > 0.45 * (f.torso || 1);
+  const frontal = Math.abs(lm[LM.LS].x - lm[LM.RS].x) > 0.6 * (f.torso || 1) && Math.abs(lm[LM.LH].x - lm[LM.RH].x) > 0.25 * (f.torso || 1); // 어깨·골반 둘 다 벌어져 보여야 정면
   f.frontal = frontal;
   if (frontal && vL > 0.8 && vR > 0.8) {
     f.symDiff = Math.abs(angleAt(lm[J.L[0]], lm[J.L[1]], lm[J.L[2]]) - angleAt(lm[J.R[0]], lm[J.R[1]], lm[J.R[2]]));
@@ -1071,6 +1135,201 @@ async function rebuildLandmarker(delegate) {
   landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts(delegate));
   toast("인식 엔진 전환: " + delegate);
 }
+// ── 각도 파이프라인 (실시간 loop 과 정밀 재분석이 공유) ──
+function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (상태 변화 없음)
+  const J = JOINT[EX.joint];
+  if (J.custom) { // 양 허벅지 벌림: 골반 중심에서 양 무릎으로 뻗은 선 사이 각도
+    const mid = { x: (lm[LM.LH].x + lm[LM.RH].x) / 2, y: (lm[LM.LH].y + lm[LM.RH].y) / 2 };
+    const vis = (lm[LM.LH].visibility + lm[LM.RH].visibility + lm[LM.LK].visibility + lm[LM.RK].visibility) / 4;
+    return { side: "양쪽", tri: [lm[LM.LK], mid, lm[LM.RK]], vis, raw: angleAt(lm[LM.LK], mid, lm[LM.RK]), J };
+  }
+  const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
+  const visL = visOf(J.L), visR = visOf(J.R);
+  const side = visL >= visR ? "L" : "R", idx = J[side], tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
+  return { side, tri, vis: Math.max(visL, visR), raw: angleAt(tri[0], tri[1], tri[2]), J };
+}
+function smoothAngle(raw, J) { // 물리 하한 → 5프레임 median → EMA. win/smooth/lastGood 갱신
+  if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
+  const med = median(raw);
+  if (!(smooth != null && Math.abs(med - smooth) > 40)) smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
+  return smooth;
+}
+
+// ═══════════ 정밀 분석 (B단계): 세트 녹화 → heavy 모델 오프라인 재분석 ═══════════
+// 1) 녹화 — 카메라 비디오 트랙만 MediaRecorder 로. 영상은 기기 밖으로 나가지 않고 다음 세트 시작 시 폐기
+// (녹화/정밀 상태 변수는 파일 상단 PREC 옆에 선언 — resetSet 이 모듈 초기화 중 discardRecording 을 호출하므로)
+function startRecording() {
+  if (!recOn || !recSupported || recorder || !currentStream) return;
+  const vt = currentStream.getVideoTracks ? currentStream.getVideoTracks() : [];
+  if (!vt.length) return;
+  const mime = ["video/mp4", "video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find(m => { try { return MediaRecorder.isTypeSupported(m); } catch { return false; } });
+  try {
+    const ms = typeof MediaStream !== "undefined" ? new MediaStream([vt[0]]) : currentStream;
+    recorder = new MediaRecorder(ms, mime ? { mimeType: mime } : undefined);
+    recChunks = []; recT0 = performance.now(); recState = "rec";
+    const rec = recorder, exId = EX.id, sn = setNo, mt = mime || recorder.mimeType || "video/webm";
+    rec.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+    rec.onstop = () => {
+      if (recorder === rec) recorder = null;
+      if (recState === "done" && recChunks.length) { lastSetVideo = { blob: new Blob(recChunks, { type: mt }), mime: mt, tStart: recT0, ex: exId, setNo: sn, th: recThSnap }; paintPrecBtn(); }
+      else if (recState === "rec") recState = null; // 트랙 종료(카메라 전환 등)로 멈춤 → 다음 판정 프레임에서 다시 시작 (리뷰 #5)
+      recChunks = [];
+    };
+    rec.onerror = () => { try { if (rec.state !== "inactive") rec.stop(); else rec.onstop?.(); } catch {} };
+    rec.start(1000);
+    clearTimeout(recTimer); recTimer = setTimeout(() => { if (recorder === rec && rec.state === "recording") { stopRecording(); toast("녹화는 2분까지"); } }, PREC.maxSec * 1000);
+  } catch { recorder = null; recState = "done"; recSupported = false; }
+}
+var recThSnap = null;
+function stopRecording() { // 세트 종료 → blob 보관 (onstop 에서). 이 시점의 판정 기준을 함께 보관 (리포트의 기준선 자동저장 전)
+  clearTimeout(recTimer);
+  if (recState === "rec") { recState = "done"; const t = thresholds(); recThSnap = { low: t.low, high: t.high, src: t.src }; }
+  if (recorder) { try { if (recorder.state !== "inactive") recorder.stop(); else recorder.onstop?.(); } catch { recorder = null; } }
+}
+function discardRecording() { // 다음 세트 시작 / 초기화: 이전 영상·정밀 결과 폐기
+  clearTimeout(recTimer); recState = null; lastSetVideo = null; precReport = null; repView = "live";
+  if (precBusy) precCancel = true; // 진행 중인 정밀 분석은 무효 (리뷰 #1)
+  if (recorder) { const r = recorder; recorder = null; r.onstop = null; r.ondataavailable = null; try { if (r.state !== "inactive") r.stop(); } catch {} }
+  recChunks = [];
+}
+$("recSw").classList.toggle("on", recOn);
+$("recSw").onclick = e => { recOn = !recOn; e.target.classList.toggle("on", recOn); try { localStorage.setItem("formcoach.rec", recOn ? "1" : "0"); } catch {} if (!recOn) discardRecording(); toast(recOn ? "세트 영상을 녹화해 정밀 분석에 써요" : "녹화 끔 — 정밀 분석 불가"); };
+
+// 2) 오프라인 평활: 각 랜드마크 x/y/z 를 중앙 N프레임 median(양방향). visibility 는 그대로. lm 이 없는 프레임은 건너뜀
+function smoothFrames(frames, winN = PREC.medianWin) {
+  const half = Math.floor(winN / 2), out = [];
+  const medOf = arr => { const s = arr.slice().sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const smoothSet = (key, i) => {
+    const base = frames[i][key]; if (!base) return null;
+    const nb = [];
+    for (let k = Math.max(0, i - half); k <= Math.min(frames.length - 1, i + half); k++) if (frames[k][key]) nb.push(frames[k][key]);
+    return base.map((p, j) => ({ x: medOf(nb.map(q => q[j].x)), y: medOf(nb.map(q => q[j].y)), z: medOf(nb.map(q => q[j].z ?? 0)), visibility: p.visibility }));
+  };
+  for (let i = 0; i < frames.length; i++) out.push({ t: frames[i].t, lm: smoothSet("lm", i), wl: smoothSet("wl", i) });
+  return out;
+}
+// 3) 실시간 판정 상태 스냅샷/복원 — 재분석이 끝나면 화면 상태는 그대로
+function snapshotState() { return { reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
+function restoreState(s) { reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
+function resetJudgeState() { reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
+// 4) 재판정 (순수 함수: 영상 디코딩 없음 — frames = [{ t(ms), lm, wl }]). 기존 features/judge/finishRep 파이프라인 재사용, 2패스
+//    패스1 = learnRange 만 돌려 obsMin/obsMax 확보(자동 학습 기준이 첫 프레임부터 적용), 패스2 = 판정. thresholds() 우선순위는 그대로
+function reanalyzeFrames(frames, opts = {}) {
+  const snap = snapshotState(), realClock = clock, wasQuiet = quiet, liveTh = thresholds();
+  let frameT = 0; quiet = true; clock = () => frameT;
+  if (opts.th && opts.th.low != null && opts.th.high != null) thOverride = { low: opts.th.low, high: opts.th.high, src: opts.th.src || "녹화 당시 기준" };
+  try {
+    const sm = smoothFrames(frames, opts.medianWin ?? PREC.medianWin).filter(fr => fr.lm);
+    resetJudgeState();
+    for (const fr of sm) { frameT = fr.t; const m = measureFrame(fr.lm); const a = smoothAngle(m.raw, m.J); if (m.vis > CONF_TH) learnRange(a); }
+    const keep = { obsMin, obsMax, obsFrames };
+    resetJudgeState(); obsMin = keep.obsMin; obsMax = keep.obsMax; obsFrames = keep.obsFrames;
+    let visSum = 0, visN = 0;
+    for (const fr of sm) {
+      frameT = fr.t;
+      const m = measureFrame(fr.lm), a = smoothAngle(m.raw, m.J);
+      if (m.vis <= CONF_TH) continue;
+      visSum += m.vis; visN++; learnRange(a);
+      const th = thresholds();
+      if (th.src === "학습 대기" || (th.src === "자동 학습" && !autoReady())) continue;
+      judge(a, m.vis, features(fr.lm, m.side, fr.wl));
+    }
+    const dur = sm.length ? (sm[sm.length - 1].t - sm[0].t) / 1000 : 0;
+    const used = thresholds();
+    return { repList: repList.map(r => ({ ...r, flags: [...r.flags] })), conf: visN ? visSum / visN : 0, frames: sm.length, model: opts.model || "heavy", durationSec: dur, obs: { min: obsMin, max: obsMax },
+      thSrc: used.src, thLow: used.low, thHigh: used.high, liveThSrc: liveTh.src };
+  } finally { thOverride = null; clock = realClock; quiet = wasQuiet; restoreState(snap); }
+}
+// 5) heavy 모델 + 녹화 영상에서 프레임 추출 (브라우저 전용)
+let precLandmarker = null, precTsLast = 0; // precBusy/precCancel 은 상단 선언 (discardRecording 이 초기화 중 참조)
+async function getPrecLandmarker(force) { // force: "CPU" 로 재생성 (GPU 인스턴스가 detect 에서 계속 실패할 때, 리뷰 #4)
+  if (precLandmarker && !force) return precLandmarker;
+  if (precLandmarker) { try { precLandmarker.close?.(); } catch {} precLandmarker = null; precTsLast = 0; }
+  precProgress(force ? "정밀 엔진을 CPU 로 전환 중…" : "정밀 모델 받는 중 (약 30MB, 한 번만)", 0);
+  const o = d => ({ baseOptions: { modelAssetPath: PREC.modelUrl, delegate: d }, runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: 0.3, minPosePresenceConfidence: 0.3, minTrackingConfidence: 0.3 });
+  if (force) precLandmarker = await PoseLandmarker.createFromOptions(visionFiles, o(force));
+  else { try { precLandmarker = await PoseLandmarker.createFromOptions(visionFiles, o("GPU")); } catch { precLandmarker = await PoseLandmarker.createFromOptions(visionFiles, o("CPU")); } }
+  return precLandmarker;
+}
+// iOS: seeked 가 그려지기 전에 올 수 있음 → 새 프레임 표시 콜백을 잠깐 기다림 (리뷰 #7)
+function awaitPainted(v) { return v.requestVideoFrameCallback ? new Promise(r => { const tm = setTimeout(r, 200); v.requestVideoFrameCallback(() => { clearTimeout(tm); r(); }); }) : Promise.resolve(); }
+function seekTo(v, t, timeoutMs) { // iOS Safari 는 blob seek 가 느릴 수 있음 → 타임아웃 시 false
+  return new Promise(res => { let done = false; const fin = ok => { if (done) return; done = true; clearTimeout(tm); v.onseeked = null; res(ok); }; const tm = setTimeout(() => fin(false), timeoutMs); v.onseeked = () => fin(true); try { v.currentTime = t; } catch { fin(false); } });
+}
+async function extractFrames(blob) {
+  let lmk = await getPrecLandmarker();
+  if (precCancel) throw new Error("cancel"); // 모델 받는 동안 취소 (리뷰 #6)
+  const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.preload = "auto"; v.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"; document.body.append(v);
+  const url = URL.createObjectURL(blob); v.src = url;
+  try {
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("영상을 열 수 없어요")); });
+    let dur = v.duration;
+    if (!isFinite(dur) || dur <= 0) { await seekTo(v, 1e6, 3000); dur = v.duration; } // MediaRecorder webm 은 duration 이 Infinity 로 나올 수 있음
+    if (!isFinite(dur) || dur <= 0) dur = PREC.maxSec;
+    dur = Math.min(dur, PREC.maxSec);
+    const step = 1 / PREC.fps, total = Math.ceil(dur / step), out = [], t0 = performance.now();
+    let base = precTsLast + 1000, seekFails = 0, detectFails = 0, i = 0;
+    while (i < total) {
+      if (precCancel) throw new Error("cancel");
+      const t = i * step;
+      // 영상 끝 / duration 을 모르고 maxSec 으로 잡은 경우: 더 못 나아가면 종료 (리뷰 #2)
+      if (v.ended || (i > 0 && v.currentTime < t - step)) break;
+      if (!(await seekTo(v, t, 1500))) { if (++seekFails >= 10) throw new Error("영상 탐색이 계속 실패해요 — 다른 브라우저(Chrome/Safari)로 시도해 보세요"); i++; continue; }
+      seekFails = 0;
+      await awaitPainted(v);
+      const ts = base + Math.round(t * 1000);
+      let res;
+      try { res = lmk.detectForVideo(v, ts); detectFails = 0; }
+      catch {
+        if (++detectFails >= 3) { // GPU 인스턴스가 detect 마다 실패 → CPU 로 재생성 후 같은 프레임부터 재시도 (리뷰 #4)
+          if (lmk.__cpu) throw new Error("정밀 인식 엔진이 동작하지 않아요");
+          lmk = await getPrecLandmarker("CPU"); lmk.__cpu = true; base = precTsLast + 1000; detectFails = 0;
+        }
+        continue;
+      }
+      precTsLast = Math.max(precTsLast, ts);
+      out.push({ t: Math.round(t * 1000), lm: res.landmarks?.[0] || null, wl: res.worldLandmarks?.[0] || null });
+      i++;
+      const el = (performance.now() - t0) / 1000, pct = i / total;
+      precProgress(`정밀 분석 중 ${Math.round(pct * 100)}% · 남은 약 ${Math.max(1, Math.round(el / pct - el))}초`, pct);
+    }
+    return out;
+  } finally { URL.revokeObjectURL(url); v.remove(); }
+}
+function precProgress(msg, pct) { $("precBar").hidden = false; $("precMsg").textContent = msg; if (pct != null) $("precFill").style.width = (pct * 100).toFixed(0) + "%"; }
+function paintPrecBtn() {
+  const b = $("precBtn");
+  if (!recSupported) { b.textContent = "🔬 정밀 분석 — 이 브라우저는 녹화 미지원"; b.disabled = true; }
+  else if (!recOn) { b.textContent = "🔬 정밀 분석 — 설정에서 세트 영상 녹화를 켜세요"; b.disabled = true; }
+  else if (precBusy) { b.textContent = "🔬 정밀 분석 중…"; b.disabled = true; }
+  else if (precReport) { b.textContent = "🔬 정밀 분석 다시 실행"; b.disabled = false; }
+  else if (!lastSetVideo) { b.textContent = "🔬 정밀 분석 — 녹화된 영상이 없어요"; b.disabled = true; }
+  else { b.textContent = `🔬 정밀 분석 (${Math.round((lastSetVideo.blob.size || 0) / 1048576 * 10) / 10}MB 영상)`; b.disabled = false; }
+  $("tabPrec").disabled = !precReport;
+}
+async function runPrecision() {
+  if (precBusy || !lastSetVideo) return;
+  const vid = lastSetVideo, exId = EX.id; // 분석 대상 고정 — 도중에 다음 세트/종목 변경이면 결과 폐기 (리뷰 #1)
+  precBusy = true; precCancel = false; paintPrecBtn(); $("precCancel").hidden = false;
+  try {
+    const frames = await extractFrames(vid.blob);
+    if (precCancel || lastSetVideo !== vid || EX.id !== exId) throw new Error("cancel");
+    if (!frames.some(f => f.lm)) throw new Error("영상에서 사람을 찾지 못했어요");
+    precProgress("재판정 중…", 1);
+    const rep = reanalyzeFrames(frames, { model: "heavy", th: vid.th });
+    if (precCancel || lastSetVideo !== vid || EX.id !== exId) throw new Error("cancel");
+    precReport = rep;
+    repView = "prec"; renderReport(precReport.repList, { mode: "prec" });
+    toast(`정밀 분석 완료 · ${precReport.repList.length}회`);
+  } catch (e) {
+    if (e.message !== "cancel") { toast("정밀 분석 실패: " + (e.message || e)); }
+  } finally { precBusy = false; $("precBar").hidden = true; paintPrecBtn(); }
+}
+$("precBtn").onclick = runPrecision;
+$("precCancel").onclick = () => { precCancel = true; };
+$("tabLive").onclick = () => { if (repView !== "live") { repView = "live"; renderReport(repList, { mode: "live" }); } };
+$("tabPrec").onclick = () => { if (precReport && repView !== "prec") { repView = "prec"; renderReport(precReport.repList, { mode: "prec" }); } };
+
 function loop() {
   if (!running) return;
   const t = performance.now();
@@ -1088,31 +1347,17 @@ function loop() {
   if (res.landmarks && res.landmarks[0]) {
     noPersonSince = 0;
     const lm = res.landmarks[0], J = JOINT[EX.joint];
-    let side, tri, vis, raw;
-    if (J.custom) { // 양 허벅지 벌림: 골반 중심에서 양 무릎으로 뻗은 선 사이 각도
-      const mid = { x: (lm[LM.LH].x + lm[LM.RH].x) / 2, y: (lm[LM.LH].y + lm[LM.RH].y) / 2 };
-      vis = (lm[LM.LH].visibility + lm[LM.RH].visibility + lm[LM.LK].visibility + lm[LM.RK].visibility) / 4;
-      raw = angleAt(lm[LM.LK], mid, lm[LM.RK]);
-      side = "양쪽"; tri = [lm[LM.LK], mid, lm[LM.RK]];
-      $("side").textContent = "양쪽 허벅지";
-    } else {
-      const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
-      const visL = visOf(J.L), visR = visOf(J.R);
-      side = visL >= visR ? "L" : "R"; vis = Math.max(visL, visR);
-      const idx = J[side]; tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
-      raw = angleAt(tri[0], tri[1], tri[2]);
-      $("side").textContent = (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
-    }
+    const { side, tri, vis, raw } = measureFrame(lm);
+    $("side").textContent = J.custom ? "양쪽 허벅지" : (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
     $("conf").textContent = (vis * 100).toFixed(0) + "%";
-    if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
-    const med = median(raw);
-    if (!(smooth != null && Math.abs(med - smooth) > 40)) smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
+    smoothAngle(raw, J);
     angleEl.textContent = smooth.toFixed(0);
     draw(lm, tri);
     const f = features(lm, side, res.worldLandmarks && res.worldLandmarks[0]);
     if (f.lean != null) $("leanDbg").textContent = (f.lean >= 0 ? "뒤로 " : "앞으로 ") + Math.abs(f.lean).toFixed(0) + "°";
     if (scan) { draw(lm, tri); runScan(lm, res.worldLandmarks && res.worldLandmarks[0], t); requestAnimationFrame(loop); return; }
     if (!calib.done) { draw(lm, tri); runCalib(lm, t); requestAnimationFrame(loop); return; }
+    if (recState === null) startRecording(); // 세트 시작(캘리브레이션 후 첫 판정 프레임)에 녹화 시작
     if (vis > CONF_TH) {
       learnRange(smooth);
       if (frames % 10 === 0) { paintAuto(); paintSrc(); }
