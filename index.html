@@ -99,6 +99,7 @@
     <button id="endSetBtn">세트 종료 → 리포트</button>
     <button class="ghost" id="resetBtn">초기화</button>
     <button class="ghost" id="voiceBtn">음성 켜짐</button>
+    <button class="ghost" id="switchBtn">📷 카메라 전환</button>
     <button class="ghost" id="flipBtn">좌우 반전</button>
     <span class="stat">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b></span>
   </div>
@@ -177,6 +178,12 @@ $("resetBtn").onclick = resetAll;
 $("endSetBtn").onclick = showReport;
 $("voiceBtn").onclick = e => { voice = !voice; e.target.textContent = voice ? "음성 켜짐" : "음성 꺼짐"; };
 $("flipBtn").onclick = () => { mirrored = !mirrored; const t = mirrored ? "scaleX(-1)" : "none"; video.style.transform = t; canvas.style.transform = t; };
+// 시작 전에도 카메라 방향 선택 가능하도록 오버레이에 버튼 추가
+{
+  const b = document.createElement("button"); b.className = "ghost"; b.id = "preFacing";
+  b.textContent = (/Android|iPhone|iPad/i.test(navigator.userAgent) ? "후면" : "전면") + " 카메라로 시작 (눌러서 변경)";
+  startBtn.insertAdjacentElement("beforebegin", b);
+}
 
 function speak(text, cls) {
   cueEl.textContent = text; cueEl.className = "cue " + cls;
@@ -405,28 +412,68 @@ async function listCams() {
 if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener("devicechange", listCams);
 
 let starting = false, currentStream = null;
+const isPhone = /Android|iPhone|iPad/i.test(navigator.userAgent);
+let facing = isPhone ? "environment" : "user"; // 폰은 후면부터, PC는 전면
+
+function applyMirror() {
+  // 전면(셀카) 카메라는 거울처럼, 후면은 그대로
+  mirrored = facing === "user";
+  const t = mirrored ? "scaleX(-1)" : "none"; video.style.transform = t; canvas.style.transform = t;
+}
+async function openCamera(opts) {
+  if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
+  const vc = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  if (opts.deviceId) vc.deviceId = { exact: opts.deviceId };
+  else vc.facingMode = { ideal: opts.facing };
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); }
+  catch { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+  currentStream = stream;
+  // 실제로 열린 카메라 방향 확인
+  try {
+    const s = stream.getVideoTracks()[0].getSettings();
+    if (s.facingMode) facing = s.facingMode;
+    else { const lbl = (stream.getVideoTracks()[0].label || "").toLowerCase(); if (/back|rear|environment|후면/.test(lbl)) facing = "environment"; else if (/front|user|전면/.test(lbl)) facing = "user"; }
+    await listCams(); camSel.value = s.deviceId || camSel.value;
+  } catch {}
+  applyMirror();
+  video.srcObject = stream;
+  await new Promise(res => { if (video.readyState >= 1) res(); else video.onloadedmetadata = () => res(); });
+  try { await video.play(); } catch (e) { if (e.name !== "AbortError") throw e; }
+  win.length = 0; smooth = null; lastGood = null; phase = null; cur = null; hipAnchor = null;
+}
+
 startBtn.onclick = async () => {
   if (starting) return;
   starting = true; startBtn.disabled = true; startBtn.textContent = "여는 중...";
   try {
-    if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
-    const isPhone = /Android|iPhone|iPad/i.test(navigator.userAgent);
-    const vc = { width: { ideal: 1280 }, height: { ideal: 720 } };
-    if (camSel.value) vc.deviceId = { exact: camSel.value }; else if (isPhone) vc.facingMode = "environment";
-    let stream;
-    try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); }
-    catch { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
-    currentStream = stream; await listCams();
-    try { camSel.value = stream.getVideoTracks()[0].getSettings().deviceId || camSel.value; } catch {}
-    video.srcObject = stream;
-    await new Promise(res => { if (video.readyState >= 1) res(); else video.onloadedmetadata = () => res(); });
-    try { await video.play(); } catch (e) { if (e.name !== "AbortError") throw e; }
+    // PC에서 드롭다운으로 고른 카메라가 있으면 그걸로, 폰은 방향 우선
+    await openCamera(isPhone ? { facing } : (camSel.value ? { deviceId: camSel.value } : { facing }));
     overlay.hidden = true; running = true;
     speak(EX.name + " 시작합니다", "info");
     requestAnimationFrame(loop);
   } catch (e) { statusEl.textContent = "카메라를 열 수 없어요: " + e.name + " - " + e.message; }
   finally { starting = false; startBtn.disabled = false; startBtn.textContent = "카메라 시작"; }
 };
+
+$("preFacing").onclick = e => { facing = facing === "user" ? "environment" : "user"; e.target.textContent = (facing === "user" ? "전면" : "후면") + " 카메라로 시작 (눌러서 변경)"; };
+
+// 전·후면 전환
+$("switchBtn").onclick = async () => {
+  if (starting) return;
+  starting = true;
+  try {
+    facing = facing === "user" ? "environment" : "user";
+    if (isPhone) await openCamera({ facing });
+    else { // PC: 목록에서 다음 카메라로
+      const n = camSel.options.length; if (n > 1) camSel.selectedIndex = (camSel.selectedIndex + 1) % n;
+      await openCamera({ deviceId: camSel.value });
+    }
+    hint(facing === "user" ? "전면 카메라" : "후면 카메라", "info");
+  } catch (e) { hint("카메라 전환 실패: " + e.name, "warn"); }
+  finally { starting = false; }
+};
+camSel.onchange = async () => { if (running && !starting) { starting = true; try { await openCamera({ deviceId: camSel.value }); } catch {} finally { starting = false; } } };
 init();
 </script>
 </body>
