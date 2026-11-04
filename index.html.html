@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>헬스 머신 자세 데모</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
+    --accent: #ffb020; --good: #3ddc84; --warn: #ff5c5c; --skel: #4fc3f7;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    padding-block: 10px; gap: 10px;
+  }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; max-width: 720px; width: 100%; margin: 0 auto; }
+  h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  select, button { font: inherit; font-weight: 700; border-radius: 10px; padding: 10px 14px; cursor: pointer; font-size: 15px; }
+  select { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+  button { color: #111; background: var(--accent); border: 0; }
+  button.ghost { background: var(--panel); color: var(--fg); border: 1px solid var(--line); }
+  button:disabled { opacity: .6; cursor: default; }
+  button:focus-visible, select:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+  .stage { position: relative; width: 100%; max-width: 720px; margin: 0 auto; aspect-ratio: 4 / 3; background: #000; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .hud { position: absolute; left: 0; right: 0; top: 0; padding: 10px 12px; display: flex; justify-content: space-between; pointer-events: none; font-variant-numeric: tabular-nums; }
+  .big { font-size: 44px; font-weight: 800; line-height: 1; text-shadow: 0 2px 8px rgba(0,0,0,.7); }
+  .big small { font-size: 14px; font-weight: 600; color: var(--muted); display: block; margin-top: 4px; }
+  .reps { text-align: right; }
+  .checks { position: absolute; right: 10px; top: 80px; display: grid; gap: 4px; pointer-events: none; }
+  .chk { font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 6px; background: rgba(0,0,0,.55); color: var(--muted); text-align: right; }
+  .chk.on { color: var(--warn); background: rgba(255,92,92,.18); }
+  .chk.ok { color: var(--good); }
+  .cue { position: absolute; left: 0; right: 0; bottom: 0; padding: 12px; text-align: center; font-size: 22px; font-weight: 700; pointer-events: none; background: linear-gradient(transparent, rgba(0,0,0,.75)); min-height: 56px; text-shadow: 0 1px 6px rgba(0,0,0,.8); }
+  .cue.good { color: var(--good); } .cue.warn { color: var(--warn); } .cue.info { color: var(--accent); }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; background: rgba(15,18,22,.92); text-align: center; padding: 20px; }
+  .overlay p { margin: 0; color: var(--muted); font-size: 14px; max-width: 34ch; line-height: 1.5; }
+  .panel { width: 100%; max-width: 720px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: grid; gap: 10px; grid-template-columns: 1fr 1fr; }
+  .panel label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+  .panel label b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .row { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .stat { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .stat b { color: var(--fg); }
+  .hint { grid-column: 1 / -1; font-size: 13px; color: var(--accent); }
+  .log { grid-column: 1 / -1; font-size: 13px; color: var(--muted); max-height: 160px; overflow: auto; font-variant-numeric: tabular-nums; }
+  .log div { padding: 4px 0; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .log div:first-child { border-top: 0; }
+  .score { font-weight: 800; min-width: 36px; }
+  .tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: rgba(255,92,92,.15); color: var(--warn); }
+  .tag.ok { background: rgba(61,220,132,.15); color: var(--good); }
+  .ok { color: var(--good); } .bad { color: var(--warn); }
+  .report { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 10px; display: grid; gap: 8px; }
+  .report h2 { font-size: 15px; margin: 0; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+  .kpi { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .kpi b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .kpi span { font-size: 12px; color: var(--muted); }
+  #chart { width: 100%; height: 120px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; }
+  .advice { font-size: 14px; line-height: 1.5; }
+  @media (max-width: 420px) { .big { font-size: 36px; } .cue { font-size: 18px; } .panel { grid-template-columns: 1fr; } .checks { top: 70px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>헬스 머신 자세 데모</h1>
+  <select id="exSel" aria-label="운동 종목"></select>
+</header>
+
+<div class="stage">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="canvas"></canvas>
+  <div class="hud">
+    <div class="big"><span id="angle">--</span>°<small id="angleLabel">관절 각도</small></div>
+    <div class="big reps"><span id="reps">0</span><small>반복</small></div>
+  </div>
+  <div class="checks" id="checks"></div>
+  <div class="cue info" id="cue"></div>
+  <div class="overlay" id="overlay">
+    <p id="status">카메라와 포즈 모델을 불러옵니다. 첫 로딩은 10~20초 걸릴 수 있어요.</p>
+    <select id="camSel" hidden></select>
+    <button id="startBtn" hidden>카메라 시작</button>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="hint" id="hint"></div>
+  <label>굽힘 기준 (이 각도 아래면 충분히 굽힘) <b id="downVal">95°</b><input type="range" id="downTh" min="30" max="140" value="95"></label>
+  <label>폄 기준 (이 각도 위면 다 폈음) <b id="upVal">155°</b><input type="range" id="upTh" min="100" max="178" value="155"></label>
+  <div class="row">
+    <button id="endSetBtn">세트 종료 → 리포트</button>
+    <button class="ghost" id="resetBtn">초기화</button>
+    <button class="ghost" id="voiceBtn">음성 켜짐</button>
+    <button class="ghost" id="flipBtn">좌우 반전</button>
+    <span class="stat">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b></span>
+  </div>
+  <div class="log" id="log"></div>
+  <div class="report" id="report" hidden>
+    <h2>세트 리포트</h2>
+    <div class="kpis" id="kpis"></div>
+    <canvas id="chart"></canvas>
+    <div class="advice" id="advice"></div>
+  </div>
+</div>
+
+<script type="module">
+import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+// ───────── 관절·종목 정의 ─────────
+const LM = { LS:11, RS:12, LE:13, RE:14, LW:15, RW:16, LH:23, RH:24, LK:25, RK:26, LA:27, RA:28 };
+const JOINT = {
+  knee:  { L: [23,25,27], R: [24,26,28], label: "무릎 각도", minPhys: 30 },
+  elbow: { L: [11,13,15], R: [12,14,16], label: "팔꿈치 각도", minPhys: 25 },
+  hip:   { L: [11,23,25], R: [12,24,26], label: "고관절 각도", minPhys: 35 },
+};
+// checks: depth(가동범위) lockout(끝까지 폄) tempo(반동/속도) hip(엉덩이 들림) sym(좌우 대칭) valgus(무릎 모임) fatigue(가동범위 감소)
+const ALL = ["depth","lockout","tempo","sym","fatigue"];
+const EXERCISES = [
+  { id:"legpress",  name:"레그프레스",       joint:"knee",  low:95,  high:155, cam:"측면. 머신 옆에 세우고 엉덩이~발이 다 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:[...ALL,"hip","valgus"], seated:true },
+  { id:"squat",     name:"스쿼트",           joint:"knee",  low:100, high:160, cam:"측면 또는 45도. 전신이 보이게", cueLow:"더 앉으세요", cueHigh:"끝까지 일어나세요", checks:[...ALL,"valgus"] },
+  { id:"legext",    name:"레그 익스텐션",     joint:"knee",  low:100, high:160, cam:"측면. 허벅지와 정강이가 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"], seated:true },
+  { id:"legcurl",   name:"레그 컬",          joint:"knee",  low:80,  high:150, cam:"측면. 엎드린 채 다리 전체가 보이게", cueLow:"더 당기세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"], seated:true },
+  { id:"chest",     name:"체스트 프레스",     joint:"elbow", low:90,  high:155, cam:"측면. 어깨~손이 보이게", cueLow:"더 당겨오세요", cueHigh:"끝까지 미세요", checks:ALL },
+  { id:"shoulder",  name:"숄더 프레스",       joint:"elbow", low:90,  high:160, cam:"측면 또는 정면. 어깨~손이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 올리세요", checks:ALL },
+  { id:"latpull",   name:"랫풀다운",         joint:"elbow", low:70,  high:150, cam:"측면 또는 후면. 어깨~손이 보이게", cueLow:"더 당기세요", cueHigh:"끝까지 펴세요", checks:ALL },
+  { id:"row",       name:"시티드 로우",       joint:"elbow", low:60,  high:150, cam:"측면. 어깨~손이 보이게", cueLow:"더 당기세요", cueHigh:"끝까지 펴세요", checks:ALL },
+  { id:"curl",      name:"바이셉 컬",         joint:"elbow", low:55,  high:150, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 내리세요", checks:ALL },
+  { id:"tricep",    name:"트라이셉 푸시다운", joint:"elbow", low:90,  high:160, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 누르세요", checks:ALL },
+  { id:"pushup",    name:"푸시업",           joint:"elbow", low:90,  high:155, cam:"측면. 전신이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:ALL },
+  { id:"deadlift",  name:"데드리프트",        joint:"hip",   low:90,  high:165, cam:"측면. 전신이 보이게", cueLow:"더 숙이세요", cueHigh:"끝까지 펴세요", checks:ALL },
+  { id:"hipthrust", name:"힙 쓰러스트",       joint:"hip",   low:100, high:165, cam:"측면. 어깨~무릎이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 올리세요", checks:ALL },
+];
+const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지" };
+let EX = EXERCISES[0];
+
+const $ = id => document.getElementById(id);
+const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
+const angleEl = $("angle"), repsEl = $("reps"), cueEl = $("cue"), statusEl = $("status");
+const overlay = $("overlay"), startBtn = $("startBtn"), camSel = $("camSel"), exSel = $("exSel");
+const downTh = $("downTh"), upTh = $("upTh"), downVal = $("downVal"), upVal = $("upVal");
+const logEl = $("log"), checksEl = $("checks");
+
+let landmarker, running = false, voice = true, mirrored = true;
+let lastSpeak = 0, lastT = performance.now(), frames = 0, smooth = null, lastGood = null;
+const win = [];
+const MIN_REP_MS = 600, CONF_TH = 0.6;
+
+// 세트 상태
+let reps = 0, phase = null, repList = [];
+let cur = null; // 진행 중인 반복의 측정값
+let hipAnchor = null, torsoLen = 1;
+
+// ───────── UI ─────────
+EXERCISES.forEach(e => { const o = document.createElement("option"); o.value = e.id; o.textContent = e.name; exSel.append(o); });
+function applyExercise(id) {
+  EX = EXERCISES.find(e => e.id === id) || EXERCISES[0];
+  downTh.value = EX.low; upTh.value = EX.high; downVal.textContent = EX.low + "°"; upVal.textContent = EX.high + "°";
+  $("angleLabel").textContent = JOINT[EX.joint].label;
+  $("hint").textContent = "📷 " + EX.cam;
+  checksEl.innerHTML = EX.checks.map(c => `<div class="chk" id="chk-${c}">${CHECK_LABEL[c]}</div>`).join("");
+  resetAll(); document.title = EX.name + " 자세 데모";
+}
+exSel.onchange = () => applyExercise(exSel.value);
+applyExercise("legpress");
+downTh.oninput = () => downVal.textContent = downTh.value + "°";
+upTh.oninput = () => upVal.textContent = upTh.value + "°";
+function resetAll() { reps = 0; repsEl.textContent = 0; logEl.innerHTML = ""; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; $("report").hidden = true; }
+$("resetBtn").onclick = resetAll;
+$("endSetBtn").onclick = showReport;
+$("voiceBtn").onclick = e => { voice = !voice; e.target.textContent = voice ? "음성 켜짐" : "음성 꺼짐"; };
+$("flipBtn").onclick = () => { mirrored = !mirrored; const t = mirrored ? "scaleX(-1)" : "none"; video.style.transform = t; canvas.style.transform = t; };
+
+function speak(text, cls) {
+  cueEl.textContent = text; cueEl.className = "cue " + cls;
+  const now = performance.now();
+  if (!voice || now - lastSpeak < 1200 || !("speechSynthesis" in window)) return;
+  lastSpeak = now; speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text); u.lang = "ko-KR"; u.rate = 1.1; speechSynthesis.speak(u);
+}
+function hint(text, cls) { cueEl.textContent = text; cueEl.className = "cue " + cls; }
+function setChk(name, state) { const el = $("chk-" + name); if (el) el.className = "chk" + (state === "on" ? " on" : state === "ok" ? " ok" : ""); }
+
+// ───────── 기하 ─────────
+function angleAt(a, b, c) {
+  const v1 = { x: a.x - b.x, y: a.y - b.y }, v2 = { x: c.x - b.x, y: c.y - b.y };
+  const dot = v1.x * v2.x + v1.y * v2.y; const m = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1e-6;
+  return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+function median(v) { win.push(v); if (win.length > 5) win.shift(); const s = [...win].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
+
+// ───────── 반복 판정 + 체크 ─────────
+function newRep(now, angle, conf) {
+  return { tStart: now, tBottom: now, tEnd: 0, min: angle, max: angle, confSum: conf, confN: 1, hipMove: 0, symDiff: 0, valgus: 0, prevAngle: angle, prevT: now, maxVel: 0 };
+}
+function judge(angle, conf, f) {
+  const low = +downTh.value, high = +upTh.value, now = performance.now();
+  if (phase === null) { phase = angle > (low + high) / 2 ? "high" : "low"; return; }
+
+  if (phase === "high") {
+    if (angle < high - 10 && !cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
+    if (angle < low) { phase = "low"; speak("좋아요", "good"); setChk("depth", "ok"); }
+    else if (cur && angle < high - 10 && now - lastSpeak > 2000) hint(EX.cueLow, "warn");
+    if (cur) accumulate(cur, angle, conf, f, now);
+  } else {
+    if (!cur) cur = newRep(now, angle, conf);
+    accumulate(cur, angle, conf, f, now);
+    if (angle > high) {
+      cur.tEnd = now; phase = "high";
+      const dur = cur.tEnd - cur.tStart;
+      if (dur < MIN_REP_MS) { hint("너무 빨라요 (카운트 제외)", "warn"); cur = null; return; }
+      finishRep(cur, low, high); cur = null;
+    } else if (angle > low + 20 && now - cur.tStart > 1500 && now - lastSpeak > 2500) speak(EX.cueHigh, "warn");
+  }
+}
+function accumulate(r, angle, conf, f, now) {
+  if (angle < r.min) { r.min = angle; r.tBottom = now; }
+  r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++;
+  const dt = (now - r.prevT) / 1000; if (dt > 0) r.maxVel = Math.max(r.maxVel, Math.abs(angle - r.prevAngle) / dt);
+  r.prevAngle = angle; r.prevT = now;
+  if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
+  if (f.symDiff != null) r.symDiff = Math.max(r.symDiff, f.symDiff);
+  if (f.valgus != null) r.valgus = Math.min(r.valgus || 9, f.valgus);
+  // 실시간 체크 표시
+  setChk("hip", r.hipMove > 0.08 ? "on" : "");
+  setChk("sym", r.symDiff > 15 ? "on" : "");
+  setChk("valgus", (r.valgus && r.valgus < 0.75) ? "on" : "");
+}
+function finishRep(r, low, high) {
+  reps++; repsEl.textContent = reps;
+  const ecc = (r.tBottom - r.tStart) / 1000, con = (r.tEnd - r.tBottom) / 1000;
+  const flags = [];
+  if (r.min > low) flags.push("depth");
+  if (r.max < high) flags.push("lockout");
+  if (EX.checks.includes("tempo") && (ecc < 0.5 || con < 0.3)) flags.push("tempo");
+  if (EX.checks.includes("hip") && r.hipMove > 0.08) flags.push("hip");
+  if (EX.checks.includes("sym") && r.symDiff > 15) flags.push("sym");
+  if (EX.checks.includes("valgus") && r.valgus && r.valgus < 0.75) flags.push("valgus");
+  const base = repList.slice(0, 2);
+  if (EX.checks.includes("fatigue") && base.length === 2) { const b = (base[0].min + base[1].min) / 2; if (r.min - b > 10) flags.push("fatigue"); }
+  let score = 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:15, tempo:20, hip:25, sym:15, valgus:25, fatigue:10 }[f] || 10), 0);
+  score = Math.max(0, score);
+  const rep = { n: reps, min: r.min, max: r.max, ecc, con, hipMove: r.hipMove, symDiff: r.symDiff, valgus: r.valgus, conf: r.confSum / r.confN, flags, score };
+  repList.push(rep);
+  logRep(rep);
+  ["depth","lockout","tempo","hip","sym","valgus","fatigue"].forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
+  // 음성: 가장 중요한 문제 1개만 (안전 > 효과)
+  const PRIO = ["hip","valgus","tempo","depth","lockout","sym","fatigue"];
+  const top = PRIO.find(p => flags.includes(p));
+  const CUE = { hip:"엉덩이 붙이세요", valgus:"무릎 벌리세요", tempo: ecc < 0.5 ? "천천히 내리세요" : "반동 쓰지 마세요", depth: EX.cueLow, lockout: EX.cueHigh, sym:"양쪽 같이 미세요", fatigue:"가동범위가 줄고 있어요" };
+  speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
+}
+function logRep(r) {
+  const d = document.createElement("div");
+  const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${CHECK_LABEL[f]}</span>`).join("") : `<span class="tag ok">좋음</span>`;
+  d.innerHTML = `<span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s · ${tags}`;
+  logEl.prepend(d);
+}
+
+// ───────── 세트 리포트 ─────────
+function showReport() {
+  if (!repList.length) { hint("기록된 반복이 없어요", "info"); return; }
+  $("report").hidden = false;
+  const n = repList.length, avg = a => a.reduce((s, v) => s + v, 0) / a.length;
+  const avgScore = avg(repList.map(r => r.score)), avgMin = avg(repList.map(r => r.min));
+  const first = repList.slice(0, Math.min(3, n)), last = repList.slice(-Math.min(3, n));
+  const romKeep = n >= 4 ? Math.round(100 - Math.max(0, avg(last.map(r => r.min)) - avg(first.map(r => r.min))) / Math.max(1, 180 - avg(first.map(r => r.min))) * 100) : null;
+  const tempo = avg(repList.map(r => r.ecc)).toFixed(1) + "s / " + avg(repList.map(r => r.con)).toFixed(1) + "s";
+  const cnt = {}; repList.forEach(r => r.flags.forEach(f => cnt[f] = (cnt[f] || 0) + 1));
+  $("kpis").innerHTML = `
+    <div class="kpi"><b>${n}회</b><span>반복</span></div>
+    <div class="kpi"><b class="${avgScore >= 80 ? "ok" : "bad"}">${avgScore.toFixed(0)}</b><span>평균 점수</span></div>
+    <div class="kpi"><b>${avgMin.toFixed(0)}°</b><span>평균 최저 각도</span></div>
+    <div class="kpi"><b>${tempo}</b><span>평균 템포 ↓/↑</span></div>
+    ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${romKeep}%</b><span>가동범위 유지율</span></div>` : ""}`;
+  drawChart(repList, +downTh.value);
+  const worst = Object.entries(cnt).sort((a, b) => b[1] - a[1]);
+  const ADVICE = {
+    depth: "가동범위가 부족한 반복이 많아요. 무게를 5~10% 낮추고 기준선까지 내려가는 데 집중해 보세요.",
+    lockout: "끝까지 펴지 않고 다음 반복으로 넘어가는 경향이 있어요. 위에서 잠깐 멈추세요.",
+    tempo: "내리는 속도가 빠르거나 반동을 쓰고 있어요. 내릴 때 2초, 밀 때 1초를 목표로 하세요.",
+    hip: "엉덩이가 등받이에서 떠요. 허리 부담이 커지니 가동범위를 줄이거나 발 위치를 조정하세요.",
+    sym: "좌우 다리가 다르게 움직여요. 약한 쪽을 의식해서 같이 밀어보세요.",
+    valgus: "무릎이 안쪽으로 모여요. 발끝 방향으로 무릎을 벌린다는 느낌으로 미세요.",
+    fatigue: "세트 후반에 가동범위가 줄었어요. 반복 수를 줄이거나 휴식을 늘려보세요.",
+  };
+  $("advice").innerHTML = worst.length
+    ? `<b>이번 세트에서 가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${CHECK_LABEL[f]} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}`
+    : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요. 다음 세트는 무게를 조금 올려볼 수 있어요.";
+  $("report").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function drawChart(list, low) {
+  const c = $("chart"), g = c.getContext("2d");
+  c.width = c.clientWidth * devicePixelRatio; c.height = c.clientHeight * devicePixelRatio; g.scale(devicePixelRatio, devicePixelRatio);
+  const W = c.clientWidth, H = c.clientHeight, padL = 36, padB = 18, padT = 8;
+  const ys = list.map(r => r.min), minY = Math.min(...ys, low) - 10, maxY = Math.max(...ys, low) + 10;
+  const x = i => padL + (W - padL - 8) * (i + 0.5) / list.length, y = v => padT + (H - padT - padB) * (1 - (v - minY) / (maxY - minY));
+  g.clearRect(0, 0, W, H);
+  g.strokeStyle = "#2a323c"; g.lineWidth = 1; g.beginPath(); g.moveTo(padL, y(low)); g.lineTo(W - 8, y(low)); g.stroke();
+  g.fillStyle = "#8a97a6"; g.font = "11px system-ui"; g.textAlign = "right"; g.fillText(low + "°", padL - 4, y(low) + 4);
+  g.fillText("기준", padL - 4, y(low) - 8);
+  const bw = Math.max(6, (W - padL - 8) / list.length * 0.6);
+  list.forEach((r, i) => {
+    g.fillStyle = r.min <= low ? "#3ddc84" : "#ff5c5c";
+    g.fillRect(x(i) - bw / 2, y(r.min), bw, y(minY) - y(r.min));
+    g.fillStyle = "#8a97a6"; g.textAlign = "center"; g.fillText(r.n, x(i), H - 4);
+  });
+  g.fillStyle = "#8a97a6"; g.textAlign = "left"; g.fillText("반복별 최저 각도 (낮을수록 깊게 내림)", padL + 4, padT + 10);
+}
+
+// ───────── 그리기 ─────────
+const EDGES = [[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32],[11,13],[13,15],[12,14],[14,16]];
+function draw(lm, tri) {
+  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const P = i => ({ x: lm[i].x * canvas.width, y: lm[i].y * canvas.height });
+  ctx.lineWidth = 4; ctx.strokeStyle = "rgba(79,195,247,.85)"; ctx.lineCap = "round";
+  for (const [a, b] of EDGES) { const p = P(a), q = P(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+  const [a, b, c] = tri;
+  ctx.lineWidth = 7; ctx.strokeStyle = phase === "low" ? "#3ddc84" : "#ffb020";
+  ctx.beginPath(); ctx.moveTo(P(a).x, P(a).y); ctx.lineTo(P(b).x, P(b).y); ctx.lineTo(P(c).x, P(c).y); ctx.stroke();
+  for (const i of tri) { ctx.beginPath(); ctx.arc(P(i).x, P(i).y, 8, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill(); }
+  if (hipAnchor && EX.checks.includes("hip")) { // 엉덩이 기준점
+    ctx.strokeStyle = "rgba(255,176,32,.7)"; ctx.lineWidth = 2; ctx.beginPath();
+    ctx.arc(hipAnchor.x * canvas.width, hipAnchor.y * canvas.height, 14, 0, Math.PI * 2); ctx.stroke();
+  }
+}
+
+// ───────── 프레임별 특징 추출 ─────────
+function features(lm, side) {
+  const S = side === "L" ? lm[LM.LS] : lm[LM.RS], H = side === "L" ? lm[LM.LH] : lm[LM.RH];
+  const f = { hip: { x: H.x, y: H.y }, torso: dist(S, H) || 1 };
+  // 좌우 대칭: 양쪽 관절이 다 보일 때만
+  const J = JOINT[EX.joint];
+  const vL = (lm[J.L[0]].visibility + lm[J.L[1]].visibility + lm[J.L[2]].visibility) / 3;
+  const vR = (lm[J.R[0]].visibility + lm[J.R[1]].visibility + lm[J.R[2]].visibility) / 3;
+  if (vL > 0.6 && vR > 0.6) {
+    f.symDiff = Math.abs(angleAt(lm[J.L[0]], lm[J.L[1]], lm[J.L[2]]) - angleAt(lm[J.R[0]], lm[J.R[1]], lm[J.R[2]]));
+    if (EX.joint === "knee") { // 무릎 간격 / 발목 간격 (정면일 때 의미 있음)
+      const kneeGap = Math.abs(lm[LM.LK].x - lm[LM.RK].x), ankleGap = Math.abs(lm[LM.LA].x - lm[LM.RA].x);
+      const hipGap = Math.abs(lm[LM.LH].x - lm[LM.RH].x);
+      if (hipGap > 0.08 && ankleGap > 0.02) f.valgus = kneeGap / ankleGap; // 정면 뷰일 때만 (hipGap 충분)
+    }
+  }
+  return f;
+}
+
+function loop() {
+  if (!running) return;
+  const t = performance.now();
+  const res = landmarker.detectForVideo(video, t);
+  frames++;
+  if (t - lastT > 1000) { $("fps").textContent = frames; frames = 0; lastT = t; }
+
+  if (res.landmarks && res.landmarks[0]) {
+    const lm = res.landmarks[0], J = JOINT[EX.joint];
+    const visOf = tri => (lm[tri[0]].visibility + lm[tri[1]].visibility + lm[tri[2]].visibility) / 3;
+    const visL = visOf(J.L), visR = visOf(J.R);
+    const side = visL >= visR ? "L" : "R", tri = J[side], vis = Math.max(visL, visR);
+    $("side").textContent = (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
+    $("conf").textContent = (vis * 100).toFixed(0) + "%";
+
+    let raw = angleAt(lm[tri[0]], lm[tri[1]], lm[tri[2]]);
+    if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
+    const med = median(raw);
+    if (!(smooth != null && Math.abs(med - smooth) > 40)) smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
+    angleEl.textContent = smooth.toFixed(0);
+    draw(lm, tri);
+    if (vis > CONF_TH) judge(smooth, vis, features(lm, side));
+    else hint("관절이 잘 안 보여요. " + EX.cam, "info");
+  } else {
+    ctx.clearRect(0, 0, canvas.width, canvas.height); angleEl.textContent = "--"; hint("사람이 인식되지 않아요", "info");
+  }
+  requestAnimationFrame(loop);
+}
+
+// ───────── 초기화·카메라 ─────────
+async function init() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const opts = delegate => ({ baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate }, runningMode: "VIDEO", numPoses: 1 });
+    try { landmarker = await PoseLandmarker.createFromOptions(vision, opts("GPU")); }
+    catch { landmarker = await PoseLandmarker.createFromOptions(vision, opts("CPU")); }
+    statusEl.textContent = "준비됐어요. 카메라를 고르고 시작을 누르세요.";
+    startBtn.hidden = false; await listCams();
+  } catch (e) { statusEl.textContent = "모델 로딩 실패: " + e.message + " (인터넷 연결을 확인하세요)"; }
+}
+async function listCams() {
+  try {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    if (!devs.length) return;
+    camSel.innerHTML = "";
+    devs.forEach((d, i) => { const o = document.createElement("option"); o.value = d.deviceId; o.textContent = d.label || `카메라 ${i + 1}`; if (/screen|virtual|obs|record/i.test(d.label)) camSel.append(o); else camSel.prepend(o); });
+    camSel.selectedIndex = 0; camSel.hidden = false;
+  } catch {}
+}
+if (navigator.mediaDevices?.addEventListener) navigator.mediaDevices.addEventListener("devicechange", listCams);
+
+let starting = false, currentStream = null;
+startBtn.onclick = async () => {
+  if (starting) return;
+  starting = true; startBtn.disabled = true; startBtn.textContent = "여는 중...";
+  try {
+    if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
+    const isPhone = /Android|iPhone|iPad/i.test(navigator.userAgent);
+    const vc = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    if (camSel.value) vc.deviceId = { exact: camSel.value }; else if (isPhone) vc.facingMode = "environment";
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); }
+    catch { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+    currentStream = stream; await listCams();
+    try { camSel.value = stream.getVideoTracks()[0].getSettings().deviceId || camSel.value; } catch {}
+    video.srcObject = stream;
+    await new Promise(res => { if (video.readyState >= 1) res(); else video.onloadedmetadata = () => res(); });
+    try { await video.play(); } catch (e) { if (e.name !== "AbortError") throw e; }
+    overlay.hidden = true; running = true;
+    speak(EX.name + " 시작합니다", "info");
+    requestAnimationFrame(loop);
+  } catch (e) { statusEl.textContent = "카메라를 열 수 없어요: " + e.name + " - " + e.message; }
+  finally { starting = false; startBtn.disabled = false; startBtn.textContent = "카메라 시작"; }
+};
+init();
+</script>
+</body>
+</html>
