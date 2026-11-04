@@ -113,6 +113,7 @@
         <button class="primary" id="startBtn" disabled>준비 중...</button>
       </div>
       <p id="camHint0" class="camhint"></p>
+      <p id="tip0" class="camhint" style="color:var(--fg);background:rgba(255,255,255,.06)" hidden></p>
     </div>
   </div>
 
@@ -132,11 +133,14 @@
   <div class="body">
     <div class="field"><span>운동 종목</span><select id="exSel"></select></div>
     <div class="camhint" id="camHint"></div>
+    <div class="camhint" id="tip" style="color:var(--fg);background:rgba(255,255,255,.06)" hidden></div>
     <div class="section">판정 기준</div>
-    <label class="field"><span>굽힘 기준 — 이 각도 아래면 충분히 굽힘 <b id="downVal">95°</b></span><input type="range" id="downTh" min="30" max="140" value="95"></label>
-    <label class="field"><span>폄 기준 — 이 각도 위면 다 폈음 <b id="upVal">155°</b></span><input type="range" id="upTh" min="100" max="178" value="155"></label>
+    <label class="field"><span><span id="lowLbl">굽힘 기준 — 이 각도 아래면 충분히 굽힘</span> <b id="downVal">95°</b></span><input type="range" id="downTh" min="5" max="140" value="95"></label>
+    <label class="field"><span><span id="highLbl">폄 기준 — 이 각도 위면 다 폈음</span> <b id="upVal">155°</b></span><input type="range" id="upTh" min="20" max="178" value="155"></label>
     <div class="section">카메라</div>
-    <div class="field"><span>카메라 선택</span><select id="camSel"></select></div>
+    <div class="field" id="facingField"><span>카메라</span>
+      <div style="display:flex;gap:8px"><button class="ghost" id="faceBack" style="flex:1">후면</button><button class="ghost" id="faceFront" style="flex:1">전면</button></div></div>
+    <div class="field" id="camSelField"><span>카메라 선택 (PC)</span><select id="camSel"></select></div>
     <div class="toggle"><span>화면 좌우 반전</span><button class="sw" id="flipSw" aria-label="좌우 반전"></button></div>
     <div class="section">피드백</div>
     <div class="toggle"><span>음성 안내</span><button class="sw on" id="voiceSw" aria-label="음성 안내"></button></div>
@@ -144,7 +148,8 @@
     <div id="voiceInfo" style="font-size:12px;color:var(--muted);line-height:1.5"></div>
     <div class="section">기타</div>
     <button class="ghost" id="resetBtn">카운트 초기화</button>
-    <div style="font-size:12px;color:var(--muted);line-height:1.5">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b><br>영상은 기기 안에서만 처리되며 저장·전송되지 않습니다.</div>
+    <button class="ghost" id="cpuBtn">인식이 안 될 때: 엔진 CPU 모드로 전환</button>
+    <div style="font-size:12px;color:var(--muted);line-height:1.5">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b> · 상체 <b id="leanDbg">-</b><br>영상은 기기 안에서만 처리되며 저장·전송되지 않습니다.</div>
   </div>
 </div>
 
@@ -173,6 +178,7 @@ const JOINT = {
   knee:  { L: [23,25,27], R: [24,26,28], label: "무릎 각도", minPhys: 30 },
   elbow: { L: [11,13,15], R: [12,14,16], label: "팔꿈치 각도", minPhys: 25 },
   hip:   { L: [11,23,25], R: [12,24,26], label: "고관절 각도", minPhys: 35 },
+  thighs:{ custom: true, label: "다리 벌림 각도", minPhys: 3 }, // 양 허벅지 사이 각도 (정면 촬영)
 };
 const ALL = ["depth","lockout","tempo","sym","fatigue"];
 const EXERCISES = [
@@ -187,10 +193,24 @@ const EXERCISES = [
   { id:"curl",      name:"바이셉 컬",         joint:"elbow", low:55,  high:150, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 내리세요", checks:ALL },
   { id:"tricep",    name:"트라이셉 푸시다운", joint:"elbow", low:90,  high:160, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 누르세요", checks:ALL },
   { id:"pushup",    name:"푸시업",           joint:"elbow", low:90,  high:155, cam:"측면. 전신이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:ALL },
+  { id:"outthigh",  name:"아웃타이 · 기본",  joint:"thighs", low:25, high:55, cam:"정면 또는 앞쪽 45도. 골반~무릎이 보이게", cueLow:"끝까지 모으세요", cueHigh:"더 벌리세요",
+    checks:["lockout","hold","hip","tempo","fatigue"], holdSec:3,
+    tip:"무게는 가볍게(5~10kg), 자세 위주. 발아치로 발판을 누르고, 손잡이는 몸 안쪽으로 미는 힘을 같이 쓰세요. 벌린 끝에서 3초 버티기." },
+  { id:"outthigh_lie", name:"아웃타이 · 뒤로 젖힘 (윗엉덩이)", joint:"thighs", low:25, high:50, cam:"앞쪽 45도. 상체 기울기와 골반~무릎이 함께 보이게", cueLow:"끝까지 모으세요", cueHigh:"다리를 멀리 뻗으세요",
+    checks:["lockout","hold","lean","hip","tempo","fatigue"], holdSec:2, lean:{ dir:"back", min:20 },
+    tip:"상체를 살짝 들어 뒤로 젖히고(눕힌 형은 배꼽이 천장), 아랫배를 꽉 잡은 채 허벅지 힘으로 다리를 '멀어지게' 뻗으세요. 완전히 쫙 벌리기보다 다리뼈가 길어지는 느낌으로 1~3초 버티기. 골반이 아래로 떨어지면 안 돼요." },
+  { id:"outthigh_stiff", name:"아웃타이 · 앞으로 숙임 (엉덩이 전체·하단)", joint:"thighs", low:25, high:55, cam:"앞쪽 45도. 상체 기울기와 골반~무릎이 함께 보이게", cueLow:"버티면서 천천히 모으세요", cueHigh:"더 벌리세요",
+    checks:["lockout","hold","lean","slowReturn","hip","fatigue"], holdSec:1, lean:{ dir:"forward", min:30 }, returnSec:1.0,
+    tip:"고관절 힌지로 상체를 앞으로 숙이고 척추가 길어지는 느낌 유지(배꼽이 바닥). 다리를 연 뒤 돌아올 때가 핵심: 버티면서 천천히, 다리뼈가 길어지게 돌아오세요. 엉덩이가 부풀어 오르는 느낌이 나야 정확한 자세." },
+  { id:"inthigh",   name:"이너타이 (모으기)",  joint:"thighs", low:20, high:55, cam:"정면. 의자 앞에서 골반~무릎이 보이게", cueLow:"더 모으세요", cueHigh:"끝까지 벌리세요", checks:["depth","lockout","tempo","hip","fatigue"],
+    tip:"발바닥을 잘 눌러 지지하고, 코어는 플랭크처럼 유지. 모을 때 골반이 뒤로 말리지 않게." },
   { id:"deadlift",  name:"데드리프트",        joint:"hip",   low:90,  high:165, cam:"측면. 전신이 보이게", cueLow:"더 숙이세요", cueHigh:"끝까지 펴세요", checks:ALL },
-  { id:"hipthrust", name:"힙 쓰러스트",       joint:"hip",   low:100, high:165, cam:"측면. 어깨~무릎이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 올리세요", checks:ALL },
+  { id:"hipthrust", name:"힙 쓰러스트",       joint:"hip",   low:100, high:165, cam:"측면. 어깨~발이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 올리고 쪼이세요",
+    checks:["lockout","hold","arch","feet","depth","tempo","fatigue"], holdSec:1,
+    tip:"벤치에 견갑골 아래를 대고, 뒤꿈치가 무릎 바로 아래 오게. 복부로 복압을 잡고 엉덩이를 수직으로 올려 최고점에서 1초 강하게 쪼이기. 내려올 때 허리를 꺾거나 말지 말고 척추 각도 그대로 수평 이동." },
 ];
-const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지" };
+const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치" };
+const labelFor = c => (EX.joint === "thighs" && c === "lockout") ? "끝까지 벌림" : (EX.joint === "thighs" && c === "hip") ? "골반 고정" : CHECK_LABEL[c];
 let EX = EXERCISES[0];
 
 const $ = id => document.getElementById(id);
@@ -222,8 +242,13 @@ function applyExercise(id) {
   exSel.value = EX.id; exSel0.value = EX.id;
   downTh.value = EX.low; upTh.value = EX.high; downVal.textContent = EX.low + "°"; upVal.textContent = EX.high + "°";
   $("angleLabel").textContent = JOINT[EX.joint].label; $("exName").textContent = EX.name;
+  const th = EX.joint === "thighs";
+  $("lowLbl").textContent = th ? "모음 기준 — 이 각도 아래면 다 모음" : "굽힘 기준 — 이 각도 아래면 충분히 굽힘";
+  $("highLbl").textContent = th ? "벌림 기준 — 이 각도 위면 다 벌림" : "폄 기준 — 이 각도 위면 다 폈음";
   $("camHint").textContent = "📷 " + EX.cam; $("camHint0").textContent = "📷 " + EX.cam;
-  checksEl.innerHTML = EX.checks.map(c => `<div class="chk" id="chk-${c}">${CHECK_LABEL[c]}</div>`).join("");
+  checksEl.innerHTML = EX.checks.map(c => `<div class="chk" id="chk-${c}">${labelFor(c)}</div>`).join("");
+  $("tip").textContent = EX.tip || ""; $("tip").hidden = !EX.tip;
+  $("tip0").textContent = EX.tip || ""; $("tip0").hidden = !EX.tip;
   resetSet(); setNo = 1;
 }
 exSel.onchange = () => { applyExercise(exSel.value); toast(EX.name); };
@@ -233,6 +258,7 @@ downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 function resetSet() { reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
+$("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
 $("voiceSw").onclick = e => { voice = !voice; e.target.classList.toggle("on", voice); };
 $("voiceTest").onclick = () => {
   unlockAudio(); lastSpeak = 0; ttsOk = false;
@@ -298,8 +324,76 @@ const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 function median(v) { win.push(v); if (win.length > 5) win.shift(); const s = [...win].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
 
 // ───────── 반복 판정 ─────────
-function newRep(now, angle, conf) { return { tStart: now, tBottom: now, tEnd: 0, min: angle, max: angle, confSum: conf, confN: 1, hipMove: 0, symDiff: 0, valgus: 0, prevAngle: angle, prevT: now }; }
+function newRep(now, angle, conf) { return { tStart: now, tBottom: now, tEnd: 0, min: angle, max: angle, confSum: conf, confN: 1, hipMove: 0, symDiff: 0, valgus: 0, prevAngle: angle, prevT: now, holdMs: 0, leanSum: 0, leanN: 0 }; }
+// ── 정점 버티기형 (아웃타이, 힙쓰러스트): 시작(low) → 정점(high)에서 버팀 → 천천히 복귀(low) = 1회 ──
+function judgePeak(angle, conf, f) {
+  const low = +downTh.value, high = +upTh.value, now = performance.now();
+  const holdSec = +($("holdTh")?.value || EX.holdSec);
+  if (phase === null) { phase = angle > (low + high) / 2 ? "peak" : "low"; return; }
+  if (!cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
+  const r = cur;
+  r.min = Math.min(r.min, angle); r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++;
+  if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
+  if (f.arch != null) r.archMax = Math.max(r.archMax || 0, f.arch);
+  setChk("hip", r.hipMove > 0.08 ? "on" : "");
+  if (EX.lean && f.lean != null) setChk("lean", (EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min) ? "ok" : "on");
+  if (EX.checks.includes("arch") && f.arch != null) setChk("arch", f.arch > 0.06 ? "on" : "");
+
+  if (phase === "low") {
+    if (angle >= high) { phase = "peak"; r.tPeak = now; r.holdMs = 0; r.kneeAtPeak = f.knee; speak("버티세요", "good"); }
+    else if (angle > low + 10 && now - r.tStart > 2500 && now - lastSpeak > 2500) speak(EX.cueHigh, "warn");
+  } else if (phase === "peak") {
+    if (angle >= high - 6) {
+      r.holdMs += Math.min(100, now - r.prevT);
+      if (f.lean != null) { r.leanSum += f.lean; r.leanN++; }
+      if (f.knee != null) r.kneeAtPeak = f.knee;
+      const s = r.holdMs / 1000;
+      hint(s >= holdSec ? "좋아요, 천천히 돌아오세요" : `버티기 ${s.toFixed(1)} / ${holdSec}초`, s >= holdSec ? "good" : "info");
+    } else if (angle < high - 12) { phase = "return"; r.tReturn = now; }
+  } else if (phase === "return") {
+    if (angle <= low) {
+      r.tEnd = now; const dur = r.tEnd - r.tStart;
+      phase = "low";
+      if (dur < MIN_REP_MS) { hint("너무 빨라요", "warn"); cur = null; return; }
+      finishPeakRep(r, low, high, holdSec); cur = null;
+    } else if (angle >= high) { // 다 안 모으고 다시 벌림 → 불완전 반복으로 마감
+      r.tEnd = now; r.incomplete = true; finishPeakRep(r, low, high, holdSec); cur = null; phase = "peak";
+      cur = newRep(now, angle, conf); cur.tPeak = now; cur.holdMs = 0;
+    }
+  }
+  r.prevAngle = angle; r.prevT = now;
+}
+function finishPeakRep(r, low, high, holdSec) {
+  reps++; repsEl.textContent = reps;
+  const hold = r.holdMs / 1000;
+  const ret = r.tReturn ? (r.tEnd - r.tReturn) / 1000 : 0;
+  const flags = [];
+  if (r.incomplete || r.min > low) flags.push("depth");
+  if (r.max < high) flags.push("lockout");
+  if (EX.checks.includes("hold") && hold < holdSec * 0.7) flags.push("hold");
+  const leanAvg = r.leanN ? r.leanSum / r.leanN : null;
+  if (EX.checks.includes("lean") && EX.lean && leanAvg != null && !(EX.lean.dir === "back" ? leanAvg >= EX.lean.min : -leanAvg >= EX.lean.min)) flags.push("lean");
+  if (EX.checks.includes("slowReturn") && ret < (EX.returnSec || 1.0)) flags.push("slowReturn");
+  if (EX.checks.includes("tempo") && ret < 0.4) flags.push("tempo");
+  if (EX.checks.includes("hip") && r.hipMove > 0.08) flags.push("hip");
+  if (EX.checks.includes("arch") && (r.archMax || 0) > 0.06) flags.push("arch");
+  let feetMsg = null;
+  if (EX.checks.includes("feet") && r.kneeAtPeak != null) { if (r.kneeAtPeak > 110) { flags.push("feet"); feetMsg = "발을 엉덩이 쪽으로 당기세요"; } else if (r.kneeAtPeak < 70) { flags.push("feet"); feetMsg = "발을 조금 앞으로 두세요"; } }
+  const base = repList.slice(0, 2);
+  if (EX.checks.includes("fatigue") && base.length === 2 && (base[0].max + base[1].max) / 2 - r.max > 8) flags.push("fatigue");
+  const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10 };
+  const score = Math.max(0, 100 - flags.reduce((s, f) => s + (W[f] || 10), 0));
+  repList.push({ n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score });
+  EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
+  const PRIO = ["arch","hip","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
+  const top = PRIO.find(p => flags.includes(p));
+  const CUE = { arch:"허리 꺾지 마세요, 척추 그대로", hip:"골반 떨어지지 않게", lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요", feet: feetMsg,
+    slowReturn:"돌아올 때 더 천천히", hold:`정점에서 ${holdSec}초 버티세요`, lockout: EX.cueHigh, depth: EX.cueLow, tempo:"천천히", fatigue:"가동범위가 줄고 있어요" };
+  speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
+}
+
 function judge(angle, conf, f) {
+  if (EX.holdSec) return judgePeak(angle, conf, f);
   const low = +downTh.value, high = +upTh.value, now = performance.now();
   if (phase === null) { phase = angle > (low + high) / 2 ? "high" : "low"; return; }
   if (phase === "high") {
@@ -319,7 +413,19 @@ function judge(angle, conf, f) {
 }
 function accumulate(r, angle, conf, f, now) {
   if (angle < r.min) { r.min = angle; r.tBottom = now; }
-  r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++; r.prevAngle = angle; r.prevT = now;
+  r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++;
+  // 정점(기준의 90% 이상 벌림/폄)에서 머문 시간 + 그때의 상체 기울기
+  const high = +upTh.value;
+  if (angle >= high - 5) {
+    r.holdMs += Math.min(100, now - r.prevT);
+    if (f.lean != null) { r.leanSum += f.lean; r.leanN++; }
+    if (EX.holdSec) { const s = r.holdMs / 1000; hint(s >= EX.holdSec ? "좋아요, 천천히 돌아오세요" : `버티기 ${s.toFixed(1)} / ${EX.holdSec}초`, s >= EX.holdSec ? "good" : "info"); }
+  }
+  r.prevAngle = angle; r.prevT = now;
+  if (EX.lean && f.lean != null) {
+    const need = EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min;
+    setChk("lean", need ? "ok" : "on");
+  }
   if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
   if (f.symDiff != null) r.symDiff = Math.max(r.symDiff, f.symDiff);
   if (f.valgus != null) r.valgus = Math.min(r.valgus || 9, f.valgus);
@@ -336,13 +442,25 @@ function finishRep(r, low, high) {
   if (EX.checks.includes("sym") && r.symDiff > 15) flags.push("sym");
   if (EX.checks.includes("valgus") && r.valgus && r.valgus < 0.75) flags.push("valgus");
   const base = repList.slice(0, 2);
-  if (EX.checks.includes("fatigue") && base.length === 2 && r.min - (base[0].min + base[1].min) / 2 > 10) flags.push("fatigue");
-  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:15, tempo:20, hip:25, sym:15, valgus:25, fatigue:10 }[f] || 10), 0));
-  repList.push({ n: reps, min: r.min, max: r.max, ecc, con, flags, score });
+  if (EX.checks.includes("fatigue") && base.length === 2) {
+    const b = (base[0].min + base[1].min) / 2, bmax = (base[0].max + base[1].max) / 2;
+    if (EX.joint === "thighs" ? bmax - r.max > 8 : r.min - b > 10) flags.push("fatigue");
+  }
+  const hold = r.holdMs / 1000;
+  if (EX.checks.includes("hold") && EX.holdSec && hold < EX.holdSec * 0.7) flags.push("hold");
+  const leanAvg = r.leanN ? r.leanSum / r.leanN : null;
+  if (EX.checks.includes("lean") && EX.lean && leanAvg != null) {
+    const ok = EX.lean.dir === "back" ? leanAvg >= EX.lean.min : -leanAvg >= EX.lean.min;
+    if (!ok) flags.push("lean");
+  }
+  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20 }[f] || 10), 0));
+  repList.push({ n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
-  const PRIO = ["hip","valgus","tempo","depth","lockout","sym","fatigue"];
+  const PRIO = ["hip","valgus","lean","hold","tempo","depth","lockout","sym","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
-  const CUE = { hip:"엉덩이 붙이세요", valgus:"무릎 벌리세요", tempo: ecc < 0.5 ? "천천히 내리세요" : "반동 쓰지 마세요", depth: EX.cueLow, lockout: EX.cueHigh, sym:"양쪽 같이 미세요", fatigue:"가동범위가 줄고 있어요" };
+  const th = EX.joint === "thighs";
+  const CUE = { hip: th ? "골반 떨어지지 않게" : "엉덩이 붙이세요", valgus:"무릎 벌리세요", tempo: ecc < 0.5 ? (th ? "천천히 모으세요" : "천천히 내리세요") : "반동 쓰지 마세요", depth: EX.cueLow, lockout: EX.cueHigh, sym:"양쪽 같이 미세요", fatigue:"가동범위가 줄고 있어요",
+    hold: `벌린 채 ${EX.holdSec}초 버티세요`, lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요" };
   speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
 }
 
@@ -353,16 +471,19 @@ function showReport() {
   if (!repList.length) { toast("기록된 반복이 없어요"); return; }
   $("reportTitle").textContent = `${EX.name} · ${setNo}세트 리포트`;
   const n = repList.length, avg = a => a.reduce((s, v) => s + v, 0) / a.length;
-  const avgScore = avg(repList.map(r => r.score)), avgMin = avg(repList.map(r => r.min));
+  const isTh = EX.joint === "thighs";
+  const avgScore = avg(repList.map(r => r.score)), avgMin = isTh ? avg(repList.map(r => r.max)) : avg(repList.map(r => r.min));
   const first = repList.slice(0, Math.min(3, n)), last = repList.slice(-Math.min(3, n));
-  const romKeep = n >= 4 ? Math.round(100 - Math.max(0, avg(last.map(r => r.min)) - avg(first.map(r => r.min))) / Math.max(1, 180 - avg(first.map(r => r.min))) * 100) : null;
+  const romKeep = n < 4 ? null : isTh
+    ? Math.round(Math.min(100, avg(last.map(r => r.max)) / Math.max(1, avg(first.map(r => r.max))) * 100))
+    : Math.round(100 - Math.max(0, avg(last.map(r => r.min)) - avg(first.map(r => r.min))) / Math.max(1, 180 - avg(first.map(r => r.min))) * 100);
   const tempo = avg(repList.map(r => r.ecc)).toFixed(1) + "s / " + avg(repList.map(r => r.con)).toFixed(1) + "s";
   const cnt = {}; repList.forEach(r => r.flags.forEach(f => cnt[f] = (cnt[f] || 0) + 1));
   $("kpis").innerHTML = `
     <div class="kpi"><b>${n}회</b><span>반복</span></div>
     <div class="kpi"><b class="${avgScore >= 80 ? "ok" : "bad"}">${avgScore.toFixed(0)}</b><span>평균 점수</span></div>
-    <div class="kpi"><b>${avgMin.toFixed(0)}°</b><span>평균 최저 각도</span></div>
-    <div class="kpi"><b style="font-size:16px">${tempo}</b><span>템포 ↓/↑</span></div>
+    <div class="kpi"><b>${avgMin.toFixed(0)}°</b><span>${isTh ? "평균 최대 벌림" : "평균 최저 각도"}</span></div>
+    ${isTh && EX.holdSec ? `<div class="kpi"><b>${avg(repList.map(r => r.hold)).toFixed(1)}s</b><span>평균 버티기</span></div>` : `<div class="kpi"><b style="font-size:16px">${tempo}</b><span>템포 ↓/↑</span></div>`}
     ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${romKeep}%</b><span>가동범위 유지</span></div>` : ""}`;
   const worst = Object.entries(cnt).sort((a, b) => b[1] - a[1]);
   const ADVICE = {
@@ -373,50 +494,65 @@ function showReport() {
     sym: "좌우가 다르게 움직여요. 약한 쪽을 의식해서 같이 밀어보세요.",
     valgus: "무릎이 안쪽으로 모여요. 발끝 방향으로 무릎을 벌린다는 느낌으로 미세요.",
     fatigue: "세트 후반에 가동범위가 줄었어요. 반복 수를 줄이거나 휴식을 늘려보세요.",
+    hold: `정점에서 버티는 시간이 짧아요. 벌린 끝에서 ${EX.holdSec || 3}초를 세고 돌아오세요. 무게를 낮추면 버티기가 쉬워져요.`,
+    lean: EX.lean?.dir === "back" ? "상체가 충분히 뒤로 눕지 않았어요. 등받이에 기대 배꼽이 천장을 보게 하고, 골반은 들어 올린 채 유지하세요." : "상체가 충분히 앞으로 기울지 않았어요. 고관절을 접어 배꼽이 바닥을 보게, 척추는 45도 방향으로 길게 유지하세요.",
   };
+  const th = EX.joint === "thighs";
+  const lineOf = r => th
+    ? `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · 버티기 ${r.hold.toFixed(1)}s${r.lean != null ? ` · 상체 ${r.lean >= 0 ? "뒤" : "앞"}${Math.abs(r.lean).toFixed(0)}°` : ""}`
+    : `${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s`;
   $("advice").innerHTML = worst.length
-    ? `<b>가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${CHECK_LABEL[f]} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}`
-    : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요. 다음 세트는 무게를 조금 올려볼 수 있어요.";
+    ? `<b>가장 많이 나온 문제:</b> ${worst.slice(0, 2).map(([f, c]) => `${labelFor(f)} (${c}회)`).join(", ")}<br>${ADVICE[worst[0][0]]}`
+    : "<b>깔끔한 세트예요.</b> 모든 반복이 기준을 통과했어요." + (th ? " 무게보다 자세 유지가 우선이에요." : " 다음 세트는 무게를 조금 올려볼 수 있어요.");
   logEl.innerHTML = repList.map(r => {
-    const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${CHECK_LABEL[f]}</span>`).join("") : `<span class="tag ok">좋음</span>`;
-    return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${r.min.toFixed(0)}~${r.max.toFixed(0)}° · ↓${r.ecc.toFixed(1)}s ↑${r.con.toFixed(1)}s · ${tags}</div>`;
+    const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${labelFor(f)}</span>`).join("") : `<span class="tag ok">좋음</span>`;
+    return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${lineOf(r)} · ${tags}</div>`;
   }).join("");
   openSheet("reportSheet");
-  requestAnimationFrame(() => drawChart(repList, +downTh.value));
+  requestAnimationFrame(() => isTh ? drawChart(repList.map(r => r.max), +upTh.value, v => v >= +upTh.value, "반복별 최대 벌림 각도 (높을수록 많이 벌림)") : drawChart(repList.map(r => r.min), +downTh.value, v => v <= +downTh.value, "반복별 최저 각도 (낮을수록 깊게)"));
 }
-function drawChart(list, low) {
+function drawChart(ys, ref, okFn, title) {
   const c = $("chart"), g = c.getContext("2d");
   const W = c.clientWidth || 300, H = c.clientHeight || 130;
   c.width = W * devicePixelRatio; c.height = H * devicePixelRatio; g.scale(devicePixelRatio, devicePixelRatio);
   const padL = 36, padB = 18, padT = 18;
-  const ys = list.map(r => r.min), minY = Math.min(...ys, low) - 10, maxY = Math.max(...ys, low) + 10;
-  const x = i => padL + (W - padL - 8) * (i + 0.5) / list.length, y = v => padT + (H - padT - padB) * (1 - (v - minY) / (maxY - minY));
+  const minY = Math.min(...ys, ref) - 10, maxY = Math.max(...ys, ref) + 10;
+  const x = i => padL + (W - padL - 8) * (i + 0.5) / ys.length, y = v => padT + (H - padT - padB) * (1 - (v - minY) / (maxY - minY));
   g.clearRect(0, 0, W, H);
-  g.strokeStyle = "#3a4450"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(padL, y(low)); g.lineTo(W - 8, y(low)); g.stroke(); g.setLineDash([]);
-  g.fillStyle = "#8a97a6"; g.font = "11px system-ui"; g.textAlign = "right"; g.fillText(low + "°", padL - 4, y(low) + 4);
-  const bw = Math.max(6, (W - padL - 8) / list.length * 0.6);
-  list.forEach((r, i) => { g.fillStyle = r.min <= low ? "#3ddc84" : "#ff5c5c"; g.fillRect(x(i) - bw / 2, y(r.min), bw, y(minY) - y(r.min)); g.fillStyle = "#8a97a6"; g.textAlign = "center"; g.fillText(r.n, x(i), H - 4); });
-  g.textAlign = "left"; g.fillText("반복별 최저 각도 (낮을수록 깊게)", padL + 4, 12);
+  g.strokeStyle = "#3a4450"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(padL, y(ref)); g.lineTo(W - 8, y(ref)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8a97a6"; g.font = "11px system-ui"; g.textAlign = "right"; g.fillText(ref + "°", padL - 4, y(ref) + 4);
+  const bw = Math.max(6, (W - padL - 8) / ys.length * 0.6);
+  ys.forEach((v, i) => { g.fillStyle = okFn(v) ? "#3ddc84" : "#ff5c5c"; g.fillRect(x(i) - bw / 2, y(v), bw, y(minY) - y(v)); g.fillStyle = "#8a97a6"; g.textAlign = "center"; g.fillText(i + 1, x(i), H - 4); });
+  g.textAlign = "left"; g.fillText(title, padL + 4, 12);
 }
 
 // ───────── 그리기 ─────────
 const EDGES = [[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32],[11,13],[13,15],[12,14],[14,16]];
-function draw(lm, tri) {
+function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const P = i => ({ x: lm[i].x * canvas.width, y: lm[i].y * canvas.height });
+  const Q = p => ({ x: p.x * canvas.width, y: p.y * canvas.height });
   ctx.lineWidth = 4; ctx.strokeStyle = "rgba(79,195,247,.85)"; ctx.lineCap = "round";
   for (const [a, b] of EDGES) { const p = P(a), q = P(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
-  const [a, b, c] = tri;
+  const [a, b, c] = tri.map(Q);
   ctx.lineWidth = 7; ctx.strokeStyle = phase === "low" ? "#3ddc84" : "#ffb020";
-  ctx.beginPath(); ctx.moveTo(P(a).x, P(a).y); ctx.lineTo(P(b).x, P(b).y); ctx.lineTo(P(c).x, P(c).y); ctx.stroke();
-  for (const i of tri) { ctx.beginPath(); ctx.arc(P(i).x, P(i).y, 8, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill(); }
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+  for (const p of [a, b, c]) { ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill(); }
   if (hipAnchor && EX.checks.includes("hip")) { ctx.strokeStyle = "rgba(255,176,32,.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(hipAnchor.x * canvas.width, hipAnchor.y * canvas.height, 14, 0, Math.PI * 2); ctx.stroke(); }
 }
-function features(lm, side) {
-  const S = side === "L" ? lm[LM.LS] : lm[LM.RS], H = side === "L" ? lm[LM.LH] : lm[LM.RH];
+function features(lm, side, wl) {
+  const S = side === "R" ? lm[LM.RS] : lm[LM.LS], H = side === "R" ? lm[LM.RH] : lm[LM.LH];
   const f = { hip: { x: H.x, y: H.y }, torso: dist(S, H) || 1 };
+  // 상체 기울기(도): 3D 월드 좌표에서 골반 중심→어깨 중심 벡터가 수직에서 얼마나 기울었나. +면 뒤로 눕힘, −면 앞으로 숙임
+  if (wl) {
+    const sm = { y: (wl[LM.LS].y + wl[LM.RS].y) / 2, z: (wl[LM.LS].z + wl[LM.RS].z) / 2 };
+    const hm = { y: (wl[LM.LH].y + wl[LM.RH].y) / 2, z: (wl[LM.LH].z + wl[LM.RH].z) / 2 };
+    const up = hm.y - sm.y, back = sm.z - hm.z; // y는 아래가 +, z는 카메라에서 멀어질수록 +
+    if (up > 0.05) f.lean = Math.atan2(back, up) * 180 / Math.PI;
+  }
   const J = JOINT[EX.joint];
+  if (J.custom) return f;
   const vL = (lm[J.L[0]].visibility + lm[J.L[1]].visibility + lm[J.L[2]].visibility) / 3;
   const vR = (lm[J.R[0]].visibility + lm[J.R[1]].visibility + lm[J.R[2]].visibility) / 3;
   if (vL > 0.6 && vR > 0.6) {
@@ -428,25 +564,59 @@ function features(lm, side) {
   }
   return f;
 }
+let detectErrors = 0, lastDetectT = 0, noPersonSince = 0;
+async function rebuildLandmarker(delegate) {
+  try { landmarker?.close?.(); } catch {}
+  landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts(delegate));
+  toast("인식 엔진 전환: " + delegate);
+}
 function loop() {
   if (!running) return;
   const t = performance.now();
-  const res = landmarker.detectForVideo(video, t);
+  // 영상이 아직 준비 안 됐거나 같은 프레임이면 건너뜀
+  if (!video.videoWidth || t - lastDetectT < 15) { requestAnimationFrame(loop); return; }
+  lastDetectT = t;
+  let res;
+  try { res = landmarker.detectForVideo(video, t); detectErrors = 0; }
+  catch (e) {
+    detectErrors++;
+    if (detectErrors === 3) { hint("인식 엔진 재시작 중...", "info"); rebuildLandmarker("CPU").catch(() => toast("엔진 재시작 실패")); }
+    requestAnimationFrame(loop); return;
+  }
   frames++; if (t - lastT > 1000) { $("fps").textContent = frames; frames = 0; lastT = t; }
   if (res.landmarks && res.landmarks[0]) {
+    noPersonSince = 0;
     const lm = res.landmarks[0], J = JOINT[EX.joint];
-    const visOf = tri => (lm[tri[0]].visibility + lm[tri[1]].visibility + lm[tri[2]].visibility) / 3;
-    const visL = visOf(J.L), visR = visOf(J.R);
-    const side = visL >= visR ? "L" : "R", tri = J[side], vis = Math.max(visL, visR);
-    $("side").textContent = (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", ""); $("conf").textContent = (vis * 100).toFixed(0) + "%";
-    let raw = angleAt(lm[tri[0]], lm[tri[1]], lm[tri[2]]);
+    let side, tri, vis, raw;
+    if (J.custom) { // 양 허벅지 벌림: 골반 중심에서 양 무릎으로 뻗은 선 사이 각도
+      const mid = { x: (lm[LM.LH].x + lm[LM.RH].x) / 2, y: (lm[LM.LH].y + lm[LM.RH].y) / 2 };
+      vis = (lm[LM.LH].visibility + lm[LM.RH].visibility + lm[LM.LK].visibility + lm[LM.RK].visibility) / 4;
+      raw = angleAt(lm[LM.LK], mid, lm[LM.RK]);
+      side = "양쪽"; tri = [lm[LM.LK], mid, lm[LM.RK]];
+      $("side").textContent = "양쪽 허벅지";
+    } else {
+      const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
+      const visL = visOf(J.L), visR = visOf(J.R);
+      side = visL >= visR ? "L" : "R"; vis = Math.max(visL, visR);
+      const idx = J[side]; tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
+      raw = angleAt(tri[0], tri[1], tri[2]);
+      $("side").textContent = (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
+    }
+    $("conf").textContent = (vis * 100).toFixed(0) + "%";
     if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
     const med = median(raw);
     if (!(smooth != null && Math.abs(med - smooth) > 40)) smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
     angleEl.textContent = smooth.toFixed(0);
     draw(lm, tri);
-    if (vis > CONF_TH) judge(smooth, vis, features(lm, side)); else hint("관절이 잘 안 보여요", "info");
-  } else { ctx.clearRect(0, 0, canvas.width, canvas.height); angleEl.textContent = "--"; hint("사람이 인식되지 않아요", "info"); }
+    const f = features(lm, side, res.worldLandmarks && res.worldLandmarks[0]);
+    if (f.lean != null) $("leanDbg").textContent = (f.lean >= 0 ? "뒤로 " : "앞으로 ") + Math.abs(f.lean).toFixed(0) + "°";
+    if (vis > CONF_TH) judge(smooth, vis, f); else hint("관절이 잘 안 보여요", "info");
+  } else {
+    ctx.clearRect(0, 0, canvas.width, canvas.height); angleEl.textContent = "--";
+    if (!noPersonSince) noPersonSince = t;
+    const sec = (t - noPersonSince) / 1000;
+    hint(sec > 6 ? "전신이 보이게 2~3m 뒤로 물러나세요" : sec > 3 ? "사람을 찾는 중... 밝은 곳에서 전신이 보이게" : "사람이 인식되지 않아요", "info");
+  }
   requestAnimationFrame(loop);
 }
 
@@ -454,7 +624,7 @@ function loop() {
 const isPhone = /Android|iPhone|iPad/i.test(navigator.userAgent);
 let facing = isPhone ? "environment" : "user", starting = false, currentStream = null;
 $("preFacing").textContent = (facing === "user" ? "전면" : "후면") + " 카메라로 시작 · 눌러서 변경";
-$("preFacing").onclick = e => { facing = facing === "user" ? "environment" : "user"; e.target.textContent = (facing === "user" ? "전면" : "후면") + " 카메라로 시작 · 눌러서 변경"; };
+$("preFacing").onclick = () => setFacing(facing === "user" ? "environment" : "user");
 
 async function listCams() {
   try {
@@ -465,11 +635,14 @@ async function listCams() {
 }
 async function openCamera(opts) {
   if (currentStream) { currentStream.getTracks().forEach(t => t.stop()); currentStream = null; }
-  const vc = { width: { ideal: 1280 }, height: { ideal: 720 } };
-  if (opts.deviceId) vc.deviceId = { exact: opts.deviceId }; else vc.facingMode = { ideal: opts.facing };
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); }
-  catch { stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); }
+  const base = { width: { ideal: 1280 }, height: { ideal: 720 } };
+  const tries = opts.deviceId
+    ? [{ ...base, deviceId: { exact: opts.deviceId } }]
+    : [{ ...base, facingMode: { exact: opts.facing } }, { ...base, facingMode: { ideal: opts.facing } }];
+  tries.push(true);
+  let stream, err;
+  for (const vc of tries) { try { stream = await navigator.mediaDevices.getUserMedia({ video: vc, audio: false }); break; } catch (e) { err = e; } }
+  if (!stream) throw err;
   currentStream = stream;
   try {
     const tr = stream.getVideoTracks()[0], s = tr.getSettings(), lbl = (tr.label || "").toLowerCase();
@@ -494,22 +667,39 @@ startBtn.onclick = async () => {
   finally { starting = false; startBtn.disabled = false; startBtn.textContent = "시작"; }
 };
 $("switchBtn").onclick = async () => {
-  if (starting || !running) return; starting = true;
-  try {
-    facing = facing === "user" ? "environment" : "user";
-    if (isPhone) await openCamera({ facing });
-    else { const n = camSel.options.length; if (n > 1) camSel.selectedIndex = (camSel.selectedIndex + 1) % n; await openCamera({ deviceId: camSel.value }); }
-    toast(facing === "user" ? "전면 카메라" : "후면 카메라");
-  } catch (e) { toast("카메라 전환 실패"); }
+  if (starting || !running) return;
+  if (isPhone) { setFacing(facing === "user" ? "environment" : "user"); return; }
+  starting = true;
+  try { const n = camSel.options.length; if (n > 1) camSel.selectedIndex = (camSel.selectedIndex + 1) % n; await openCamera({ deviceId: camSel.value }); toast(camSel.options[camSel.selectedIndex]?.textContent || "카메라 전환"); }
+  catch (e) { toast("카메라 전환 실패"); }
   finally { starting = false; }
 };
 camSel.onchange = async () => { if (running && !starting) { starting = true; try { await openCamera({ deviceId: camSel.value }); } catch {} finally { starting = false; } } };
 
+// 폰: 전면/후면 버튼만, PC: 카메라 목록만
+$("facingField").hidden = !isPhone; $("camSelField").hidden = isPhone;
+function paintFacing() { $("faceBack").className = "ghost" + (facing === "environment" ? " primary" : ""); $("faceFront").className = "ghost" + (facing === "user" ? " primary" : ""); $("faceBack").classList.toggle("ghost", facing !== "environment"); $("faceFront").classList.toggle("ghost", facing !== "user"); }
+async function setFacing(f) {
+  if (starting) return;
+  facing = f; paintFacing();
+  $("preFacing").textContent = (facing === "user" ? "전면" : "후면") + " 카메라로 시작 · 눌러서 변경";
+  if (!running) return;
+  starting = true; try { await openCamera({ facing }); toast(facing === "user" ? "전면 카메라" : "후면 카메라"); } catch { toast("카메라 전환 실패"); } finally { starting = false; }
+}
+$("faceBack").onclick = () => setFacing("environment");
+$("faceFront").onclick = () => setFacing("user");
+paintFacing();
+
+let visionFiles = null;
+const modelOpts = delegate => ({
+  baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate },
+  runningMode: "VIDEO", numPoses: 1,
+  minPoseDetectionConfidence: 0.3, minPosePresenceConfidence: 0.3, minTrackingConfidence: 0.3,
+});
 async function init() {
   try {
-    const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-    const opts = delegate => ({ baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate }, runningMode: "VIDEO", numPoses: 1 });
-    try { landmarker = await PoseLandmarker.createFromOptions(vision, opts("GPU")); } catch { landmarker = await PoseLandmarker.createFromOptions(vision, opts("CPU")); }
+    visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    try { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("GPU")); } catch { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("CPU")); }
     statusEl.textContent = "종목을 고르고 시작을 누르세요.";
     startBtn.disabled = false; startBtn.textContent = "시작";
     await listCams();
