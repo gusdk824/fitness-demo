@@ -408,10 +408,13 @@ function startScan() {
   if (!running) { toast("먼저 카메라를 시작하세요"); return; }
   scan = { step: 0, t0: 0, acc: {}, stable: 0 };
   closeSheets(); $("scanui").hidden = false; paintScanStep();
-  speak("내 몸 스캔을 시작합니다. 정면으로 서 주세요", "info");
+  $("exName").textContent = "내 몸 스캔"; $("angleLabel").textContent = "스캔 중"; angleEl.textContent = "--"; checksEl.hidden = true; $("endSetBtn").disabled = true;
+  cueEl.textContent = "";
+  lastSpeak = 0; speak("내 몸 스캔을 시작합니다. 정면으로 서 주세요", "info");
 }
 function endScan(saved) {
   scan = null; $("scanui").hidden = true;
+  $("exName").textContent = EX.name; $("angleLabel").textContent = JOINT[EX.joint].label; checksEl.hidden = false; $("endSetBtn").disabled = false;
   if (saved) { paintProfile(); paintSrc(); speak("스캔 완료", "good"); toast("프로필 저장됨 · 이제 내 몸 기준으로 판정해요"); }
   resetAuto(); resetCalib(); phase = null; cur = null;
 }
@@ -428,7 +431,8 @@ function nextScanStep() {
 $("scanSkip").onclick = () => scan && nextScanStep();
 $("scanCancel").onclick = () => endScan(false);
 $("scanBtn").onclick = startScan;
-$("scanBtn0").onclick = async () => { await startBtn.onclick(); if (running) startScan(); };
+let scanAfterStart = false;
+$("scanBtn0").onclick = async () => { scanAfterStart = true; await startBtn.onclick(); scanAfterStart = false; if (running) startScan(); };
 function runScan(lm, wl, t) {
   const s = SCAN_STEPS[scan.step], a = scan.acc;
   const visible = s.need.every(i => lm[i].visibility > 0.5);
@@ -928,7 +932,7 @@ startBtn.onclick = async () => {
   try {
     await openCamera({ facing });
     overlay.hidden = true; running = true;
-    speak(EX.name + " 시작합니다", "info");
+    if (!scanAfterStart) speak(EX.name + " 시작합니다", "info");
     requestAnimationFrame(loop);
   } catch (e) { statusEl.textContent = "카메라를 열 수 없어요: " + e.name; }
   finally { starting = false; startBtn.disabled = false; startBtn.textContent = "시작"; }
