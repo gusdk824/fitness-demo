@@ -553,8 +553,10 @@ function thresholds() {
   if (EX.joint === "knee" && rom.kneeMin != null) { mn = rom.kneeMin; mx = rom.kneeMax ?? 175; }
   if (EX.joint === "hip" && (rom.hipMinHinge != null || rom.hipMinSquat != null)) { mn = Math.min(rom.hipMinHinge ?? 999, rom.hipMinSquat ?? 999); mx = Math.max(rom.hipMaxHinge ?? 0, rom.hipMaxSquat ?? 0, 170); }
   if (mn != null && mx - mn > 20) {
-    // 종목별 요구 깊이: 가동범위의 일정 비율 (레그프레스 등은 최대 굽힘의 85% 지점, 폄은 95%)
-    const r = mx - mn; return { low: mn + r * 0.15, high: mn + r * 0.85, src: "내 가동범위" };
+    // 종목별 요구 깊이: 내 가동범위에서 몇 % 지점까지 내려가야 "충분"인가 (머신은 전체 가동범위를 다 쓰지 않음)
+    const ROM_LOW = { legpress:0.35, legext:0.45, legcurl:0.3, squat:0.2, deadlift:0.25, hipthrust:0.3 };
+    const ROM_HIGH = { legext:0.95, legcurl:0.9 };
+    const r = mx - mn; return { low: mn + r * (ROM_LOW[EX.id] ?? 0.2), high: mn + r * (ROM_HIGH[EX.id] ?? 0.85), src: "내 가동범위" };
   }
   if (autoReady()) return { low: obsMin + (obsMax - obsMin) * 0.25, high: obsMin + (obsMax - obsMin) * 0.75, src: "자동 학습" };
   return { low: +downTh.value, high: +upTh.value, src: autoMode && obsMin == null ? "학습 대기" : "수동" };
