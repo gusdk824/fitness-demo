@@ -140,6 +140,8 @@
     <div class="toggle"><span>화면 좌우 반전</span><button class="sw" id="flipSw" aria-label="좌우 반전"></button></div>
     <div class="section">피드백</div>
     <div class="toggle"><span>음성 안내</span><button class="sw on" id="voiceSw" aria-label="음성 안내"></button></div>
+    <button class="ghost" id="voiceTest">🔊 음성 테스트</button>
+    <div id="voiceInfo" style="font-size:12px;color:var(--muted);line-height:1.5"></div>
     <div class="section">기타</div>
     <button class="ghost" id="resetBtn">카운트 초기화</button>
     <div style="font-size:12px;color:var(--muted);line-height:1.5">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b><br>영상은 기기 안에서만 처리되며 저장·전송되지 않습니다.</div>
@@ -232,15 +234,56 @@ upTh.oninput = () => upVal.textContent = upTh.value + "°";
 function resetSet() { reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("voiceSw").onclick = e => { voice = !voice; e.target.classList.toggle("on", voice); };
+$("voiceTest").onclick = () => {
+  unlockAudio(); lastSpeak = 0; ttsOk = false;
+  speak("음성 테스트, 잘 들리면 준비 완료", "info");
+  const vs = ("speechSynthesis" in window) ? speechSynthesis.getVoices() : [];
+  const ko = vs.filter(v => /ko/i.test(v.lang)).map(v => v.name);
+  $("voiceInfo").textContent = !("speechSynthesis" in window) ? "이 브라우저는 음성 합성을 지원하지 않아요. 알림음으로 대체됩니다."
+    : ko.length ? `한국어 음성: ${ko.slice(0, 3).join(", ")}` : "한국어 음성이 없어요. 폰 설정 → TTS에서 한국어를 설치하세요. (iPhone은 무음 스위치 확인)";
+};
 $("flipSw").onclick = e => { mirrored = !mirrored; e.target.classList.toggle("on", mirrored); applyMirrorCss(); };
 function applyMirrorCss() { const t = mirrored ? "scaleX(-1)" : "none"; video.style.transform = t; canvas.style.transform = t; $("flipSw").classList.toggle("on", mirrored); }
 
+// ── 음성/알림음 ──
+let koVoice = null, audioCtx = null, ttsOk = false;
+function pickVoice() {
+  if (!("speechSynthesis" in window)) return;
+  const vs = speechSynthesis.getVoices();
+  koVoice = vs.find(v => /ko/i.test(v.lang) && /Google|Yuna|Siri|Samsung/i.test(v.name)) || vs.find(v => /ko/i.test(v.lang)) || null;
+}
+if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function beep(kind) { // 음성이 안 될 때를 위한 짧은 알림음
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type = "sine"; o.frequency.value = kind === "warn" ? 330 : 880;
+    g.gain.setValueAtTime(0.0001, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(0.4, audioCtx.currentTime + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (kind === "warn" ? 0.35 : 0.15));
+    o.connect(g).connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + 0.4);
+  } catch {}
+}
+function unlockAudio() { // 첫 터치에서 음성·오디오 권한 열기 (iOS 필수)
+  beep("ok");
+  if ("speechSynthesis" in window) { try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); } catch {} }
+}
 function speak(text, cls) {
   cueEl.textContent = text; cueEl.className = "cue " + cls;
   const now = performance.now();
-  if (!voice || now - lastSpeak < 1200 || !("speechSynthesis" in window)) return;
-  lastSpeak = now; speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text); u.lang = "ko-KR"; u.rate = 1.1; speechSynthesis.speak(u);
+  if (!voice || now - lastSpeak < 1200) return;
+  lastSpeak = now;
+  if (!("speechSynthesis" in window)) { beep(cls); return; }
+  try {
+    speechSynthesis.cancel();
+    setTimeout(() => { // 취소 직후 바로 speak하면 일부 폰에서 누락됨
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = "ko-KR"; u.rate = 1.05; u.volume = 1; if (koVoice) u.voice = koVoice;
+      u.onstart = () => { ttsOk = true; };
+      u.onerror = () => beep(cls);
+      speechSynthesis.speak(u);
+      setTimeout(() => { if (!ttsOk) beep(cls); }, 700); // 음성이 전혀 안 나오면 알림음으로 대체
+    }, 60);
+  } catch { beep(cls); }
 }
 function hint(text, cls) { cueEl.textContent = text; cueEl.className = "cue " + cls; }
 function setChk(name, state) { const el = $("chk-" + name); if (el) el.className = "chk" + (state === "on" ? " on" : state === "ok" ? " ok" : ""); }
@@ -441,6 +484,7 @@ async function openCamera(opts) {
 }
 startBtn.onclick = async () => {
   if (starting) return; starting = true; startBtn.disabled = true; startBtn.textContent = "카메라 여는 중...";
+  unlockAudio();
   try {
     await openCamera({ facing });
     overlay.hidden = true; running = true;
