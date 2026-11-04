@@ -164,6 +164,13 @@
         <button class="ghost" id="scanBtn" style="flex:1">🧍 내 몸 스캔</button>
         <button class="ghost" id="profClear">프로필 삭제</button>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ghost" id="profCopy" style="flex:1;font-size:13px">📋 프로필 복사(백업)</button>
+        <button class="ghost" id="profPaste" style="flex:1;font-size:13px">📥 붙여넣기 복원</button>
+      </div>
+      <textarea id="profBox" hidden rows="3" style="width:100%;font:12px monospace;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px"></textarea>
+      <button class="primary" id="profRestore" hidden>복원 실행</button>
+      <div style="font-size:12px;color:var(--muted);line-height:1.5">프로필은 이 폰·이 브라우저에 자동 저장돼요. 카카오톡 안 브라우저는 저장이 지워질 수 있으니 Chrome/Safari로 열고, 가끔 백업해 두세요.</div>
     </div>
     <div class="section">운동</div>
     <div class="field"><span>운동 종목</span><select id="exSel"></select></div>
@@ -366,6 +373,8 @@ function angleAt(a, b, c) {
   return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
 }
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+// 두 점을 잇는 선이 수평에서 얼마나 기울었나 (-90~90°, 좌우 반전·카메라 방향과 무관)
+function tiltDeg(a, b) { let d = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI; if (d > 90) d -= 180; if (d < -90) d += 180; return d; }
 function median(v) { win.push(v); if (win.length > 5) win.shift(); const s = [...win].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
 
 // ───────── 반복 판정 ─────────
@@ -450,11 +459,18 @@ function runScan(lm, wl, t) {
       upperArm: (dist(lm[11], lm[13]) + dist(lm[12], lm[14])) / 2 / torso,
       forearm: (dist(lm[13], lm[15]) + dist(lm[14], lm[16])) / 2 / torso,
       shoulderW: dist(lm[11], lm[12]) / torso, hipW: dist(lm[23], lm[24]) / torso,
-      shoulderTilt: Math.atan2(lm[12].y - lm[11].y, lm[12].x - lm[11].x) * 180 / Math.PI,
-      pelvisTilt: Math.atan2(lm[24].y - lm[23].y, lm[24].x - lm[23].x) * 180 / Math.PI,
+      shoulderTilt: tiltDeg(lm[11], lm[12]),
+      pelvisTilt: tiltDeg(lm[23], lm[24]),
       legDiff: (dist(lm[23], lm[27]) - dist(lm[24], lm[28])) / ((dist(lm[23], lm[27]) + dist(lm[24], lm[28])) / 2),
     };
-    // 평균 누적
+    // 자세 품질 검사: 폰이 기울었거나 정면이 아니면 측정값이 왜곡됨 → 안정 카운트 안 올림
+    const bodyH = Math.abs(((lm[27].y + lm[28].y) / 2) - ((lm[11].y + lm[12].y) / 2));
+    const problems = [];
+    if (Math.abs(f.shoulderTilt) > 12 || Math.abs(f.pelvisTilt) > 12) problems.push("폰을 똑바로 세우고 정면을 보세요");
+    if (Math.abs(f.legDiff) > 0.10) problems.push("두 발에 체중을 고르게, 다리 전체가 보이게");
+    if (bodyH < 0.45) problems.push("더 뒤로 물러나 전신이 크게 보이게");
+    if (problems.length) { $("scanLive").textContent = problems[0]; scan.stable = Math.max(0, scan.stable - 1); return; }
+    scan.stable++;
     a.front = a.front || { n: 0 }; const F = a.front; F.n++;
     for (const k in f) F[k] = (F[k] || 0) + (f[k] - (F[k] || 0)) / F.n;
     const p = Math.min(1, scan.stable / (s.sec * 25));
@@ -523,15 +539,28 @@ function thresholds() {
 const getLow = () => thresholds().low, getHigh = () => thresholds().high;
 function paintSrc() { const t = thresholds(); $("thSrc").textContent = `현재 판정 기준: ${t.src} (${t.low.toFixed(0)}° / ${t.high.toFixed(0)}°)`; }
 function resetAuto() { obsMin = obsMax = null; obsFrames = 0; }
-function saveBaseline() {
+function saveBaseline(auto) {
   if (!repList.length) return;
   const good = repList.filter(r => r.score >= 80), use = good.length >= 2 ? good : repList;
   const med = arr => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
   profile = profile || { baselines: {} }; profile.baselines = profile.baselines || {};
   profile.baselines[EX.id] = { min: med(use.map(r => r.min)), max: med(use.map(r => r.max)), hold: med(use.map(r => r.hold || 0)), ecc: med(use.map(r => r.ecc || 0)), con: med(use.map(r => r.con || 0)), date: Date.now(), n: use.length };
-  saveProfile(); paintProfile(); paintSrc(); toast(`${EX.name} 기준선 저장 (${use.length}회 기준)`);
+  saveProfile(); paintProfile(); paintSrc(); toast(auto ? `${EX.name} 기준선 자동 저장됨 (${use.length}회)` : `${EX.name} 기준선 저장 (${use.length}회 기준)`);
 }
-$("saveBaseBtn").onclick = saveBaseline;
+$("saveBaseBtn").onclick = () => saveBaseline(false);
+
+// 백업/복원 (카카오톡 등 인앱 브라우저는 저장소가 지워질 수 있음)
+$("profCopy").onclick = async () => {
+  if (!profile) { toast("저장된 프로필이 없어요"); return; }
+  const txt = JSON.stringify(profile);
+  try { await navigator.clipboard.writeText(txt); toast("프로필을 복사했어요. 메모장에 붙여넣어 보관하세요"); }
+  catch { $("profBox").value = txt; $("profBox").hidden = false; $("profBox").select(); toast("아래 상자의 내용을 길게 눌러 복사하세요"); }
+};
+$("profPaste").onclick = () => { $("profBox").hidden = false; $("profBox").value = ""; $("profBox").placeholder = "복사해 둔 프로필을 여기에 붙여넣고 '복원 실행'"; $("profRestore").hidden = false; $("profBox").focus(); };
+$("profRestore").onclick = () => {
+  try { const p = JSON.parse($("profBox").value); if (!p || !p.date) throw 0; profile = p; saveProfile(); paintProfile(); paintSrc(); $("profBox").hidden = true; $("profRestore").hidden = true; toast("프로필을 복원했어요"); }
+  catch { toast("형식이 맞지 않아요. 복사한 내용 전체를 붙여넣어 주세요"); }
+};
 $("autoSw").onclick = e => { autoMode = !autoMode; e.target.classList.toggle("on", autoMode); downTh.disabled = upTh.disabled = autoMode; resetAuto(); toast(autoMode ? "자동 기준: 1~2회 움직이면 맞춰져요" : "수동 기준 사용"); };
 downTh.disabled = upTh.disabled = true;
 function paintAuto() {
@@ -729,6 +758,10 @@ function showReport() {
     const tags = r.flags.length ? r.flags.map(f => `<span class="tag">${labelFor(f)}</span>`).join("") : `<span class="tag ok">좋음</span>`;
     return `<div><span class="score ${r.score >= 80 ? "ok" : "bad"}">${r.score}</span> #${r.n} · ${lineOf(r)} · ${tags}</div>`;
   }).join("");
+  // 기준선 자동 저장: 아직 없고, 80점 이상 반복이 3회 이상이면
+  const goodN = repList.filter(r => r.score >= 80).length;
+  if (!profile?.baselines?.[EX.id] && goodN >= 3) { saveBaseline(true); }
+  $("saveBaseBtn").textContent = profile?.baselines?.[EX.id] ? "⭐ 이 세트로 기준선 갱신" : "⭐ 이 세트를 내 기준선으로 저장";
   openSheet("reportSheet");
   requestAnimationFrame(() => isTh ? drawChart(repList.map(r => r.max), getHigh(), v => v >= getHigh(), EX.joint === "thighs" ? "반복별 최대 벌림 각도 (높을수록 많이 벌림)" : "반복별 최고 각도 (기준 위면 끝까지 올림)") : drawChart(repList.map(r => r.min), getLow(), v => v <= getLow(), "반복별 최저 각도 (낮을수록 깊게)"));
 }
