@@ -1171,7 +1171,7 @@ function startRecording() {
     rec.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
     rec.onstop = () => {
       if (recorder === rec) recorder = null;
-      if (recState === "done" && recChunks.length) { lastSetVideo = { blob: new Blob(recChunks, { type: mt }), mime: mt, tStart: recT0, ex: exId, setNo: sn, th: recThSnap }; paintPrecBtn(); }
+      if (recState === "done" && recChunks.length) { lastSetVideo = { blob: new Blob(recChunks, { type: mt }), mime: mt, tStart: recT0, durSec: (performance.now() - recT0) / 1000, ex: exId, setNo: sn, th: recThSnap }; paintPrecBtn(); }
       else if (recState === "rec") recState = null; // 트랙 종료(카메라 전환 등)로 멈춤 → 다음 판정 프레임에서 다시 시작 (리뷰 #5)
       recChunks = [];
     };
@@ -1254,9 +1254,11 @@ async function getPrecLandmarker(force) { // force: "CPU" 로 재생성 (GPU 인
 // iOS: seeked 가 그려지기 전에 올 수 있음 → 새 프레임 표시 콜백을 잠깐 기다림 (리뷰 #7)
 function awaitPainted(v) { return v.requestVideoFrameCallback ? new Promise(r => { const tm = setTimeout(r, 200); v.requestVideoFrameCallback(() => { clearTimeout(tm); r(); }); }) : Promise.resolve(); }
 function seekTo(v, t, timeoutMs) { // iOS Safari 는 blob seek 가 느릴 수 있음 → 타임아웃 시 false
-  return new Promise(res => { let done = false; const fin = ok => { if (done) return; done = true; clearTimeout(tm); v.onseeked = null; res(ok); }; const tm = setTimeout(() => fin(false), timeoutMs); v.onseeked = () => fin(true); try { v.currentTime = t; } catch { fin(false); } });
+  return new Promise(res => { let done = false; const fin = ok => { if (done) return; done = true; clearTimeout(tm); v.onseeked = null; res(ok); }; const tm = setTimeout(() => fin(false), timeoutMs); v.onseeked = () => fin(true);
+    if (Math.abs(v.currentTime - t) < 0.002 && !v.seeking) { fin(true); return; } // 이미 그 위치면 seeked 가 안 올 수 있음
+    try { v.currentTime = t; } catch { fin(false); } });
 }
-async function extractFrames(blob) {
+async function extractFrames(blob, knownDur) {
   let lmk = await getPrecLandmarker();
   if (precCancel) throw new Error("cancel"); // 모델 받는 동안 취소 (리뷰 #6)
   const v = document.createElement("video"); v.muted = true; v.playsInline = true; v.preload = "auto"; v.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none"; document.body.append(v);
@@ -1264,8 +1266,9 @@ async function extractFrames(blob) {
   try {
     await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = () => rej(new Error("영상을 열 수 없어요")); });
     let dur = v.duration;
-    if (!isFinite(dur) || dur <= 0) { await seekTo(v, 1e6, 3000); dur = v.duration; } // MediaRecorder webm 은 duration 이 Infinity 로 나올 수 있음
-    if (!isFinite(dur) || dur <= 0) dur = PREC.maxSec;
+    if (!isFinite(dur) || dur <= 0) { await seekTo(v, 1e6, 3000); await new Promise(r => setTimeout(r, 50)); dur = v.duration; } // MediaRecorder webm 은 duration 이 Infinity 로 나올 수 있음 (끝으로 seek 하면 채워짐)
+    if (!isFinite(dur) || dur <= 0) dur = knownDur || PREC.maxSec; // 그래도 모르면 녹화 시작~종료 시간으로
+    await seekTo(v, 0, 3000);
     dur = Math.min(dur, PREC.maxSec);
     const step = 1 / PREC.fps, total = Math.ceil(dur / step), out = [], t0 = performance.now();
     let base = precTsLast + 1000, seekFails = 0, detectFails = 0, i = 0;
@@ -1273,9 +1276,10 @@ async function extractFrames(blob) {
       if (precCancel) throw new Error("cancel");
       const t = i * step;
       // 영상 끝 / duration 을 모르고 maxSec 으로 잡은 경우: 더 못 나아가면 종료 (리뷰 #2)
-      if (v.ended || (i > 0 && v.currentTime < t - step)) break;
       if (!(await seekTo(v, t, 1500))) { if (++seekFails >= 10) throw new Error("영상 탐색이 계속 실패해요 — 다른 브라우저(Chrome/Safari)로 시도해 보세요"); i++; continue; }
       seekFails = 0;
+      // 영상 끝을 지났는데 duration 을 몰랐던 경우: 브라우저가 끝에 고정시킴 → 더 못 나아가면 종료 (리뷰 #2)
+      if (i > 2 && v.currentTime < t - 2 * step) break;
       await awaitPainted(v);
       const ts = base + Math.round(t * 1000);
       let res;
@@ -1312,12 +1316,14 @@ async function runPrecision() {
   const vid = lastSetVideo, exId = EX.id; // 분석 대상 고정 — 도중에 다음 세트/종목 변경이면 결과 폐기 (리뷰 #1)
   precBusy = true; precCancel = false; paintPrecBtn(); $("precCancel").hidden = false;
   try {
-    const frames = await extractFrames(vid.blob);
+    const frames = await extractFrames(vid.blob, vid.durSec);
     if (precCancel || lastSetVideo !== vid || EX.id !== exId) throw new Error("cancel");
+    if (frames.length < PREC.fps) throw new Error(`영상에서 ${frames.length}프레임만 읽혔어요 — 녹화가 너무 짧거나 브라우저가 이 영상 형식의 탐색을 지원하지 않아요`);
     if (!frames.some(f => f.lm)) throw new Error("영상에서 사람을 찾지 못했어요");
     precProgress("재판정 중…", 1);
     const rep = reanalyzeFrames(frames, { model: "heavy", th: vid.th });
     if (precCancel || lastSetVideo !== vid || EX.id !== exId) throw new Error("cancel");
+    if (!rep.repList.length) throw new Error(`정밀 분석에서 반복을 찾지 못했어요 (${frames.length}프레임, ${rep.durationSec?.toFixed?.(0) ?? "?"}초) — 실시간 결과를 그대로 쓰세요`);
     precReport = rep;
     repView = "prec"; renderReport(precReport.repList, { mode: "prec" });
     toast(`정밀 분석 완료 · ${precReport.repList.length}회`);
