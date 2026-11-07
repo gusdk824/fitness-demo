@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.07-4 -->
+<!-- APP_VER: 11.07-5 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -318,6 +318,7 @@ const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
+var lastOutWarn = 0;
 var sideCur = null, sideAlt = 0; // 측정하는 쪽(L/R) 고정용
 var heelTop = []; // 뒤꿈치 기준: 선 자세(동작 위쪽)에서 잰 뒤꿈치-발끝 높이차. 카메라 각도·원근으로 생기는 고정 차이를 빼기 위함
 function heelRel(f, angle) {
@@ -329,7 +330,7 @@ function heelRel(f, angle) {
 }
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.07-4"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.07-5"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -1242,7 +1243,9 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
   const idx = J[side], tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
   const r = EX.joint === "knee" ? railTri(lm, side) : null;
   if (r) return { side, tri: r.tri, vis: Math.max(r.vis, Math.max(visL, visR)), raw: angleAt(r.tri[0], r.tri[1], r.tri[2]), J, railFilled: r.filled };
-  return { side, tri, vis: Math.max(visL, visR), raw: angleAt(tri[0], tri[1], tri[2]), J };
+  // 관절 점이 화면 밖(가장자리)으로 나가면(visibility 0) 그 프레임 각도는 추측값 → 직전 정상 각도 유지
+  const out = tri.some(p => p.visibility === 0);
+  return { side, tri, vis: Math.max(visL, visR), raw: out && lastGood != null ? lastGood : angleAt(tri[0], tri[1], tri[2]), J, out };
 }
 function smoothAngle(raw, J) { // 물리 하한 → 5프레임 median → EMA. win/smooth/lastGood 갱신
   if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
@@ -1450,7 +1453,9 @@ function loop() {
   if (res.landmarks && res.landmarks[0]) {
     noPersonSince = 0;
     const lm = res.landmarks[0], J = JOINT[EX.joint];
-    const { side, tri, vis, raw } = measureFrame(lm);
+    const { side, tri, vis, raw, out } = measureFrame(lm);
+    // 손·발이 화면 밖으로 나가면 안내 (숄더 프레스 끝에서 손이 위로 잘리는 경우 등) — 8초에 한 번
+    if (out && calib.done && t - lastOutWarn > 8000) { lastOutWarn = t; toast(tri[2].y < 0.1 ? "손이 화면 위로 나가요 — 폰을 조금 뒤로 두세요" : "관절이 화면 밖으로 나가요 — 몸 전체가 보이게 해 주세요"); }
     $("side").textContent = J.custom ? "양쪽 허벅지" : (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
     $("conf").textContent = (vis * 100).toFixed(0) + "%";
     smoothAngle(raw, J);
