@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.07-3 -->
+<!-- APP_VER: 11.07-4 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -318,6 +318,7 @@ const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
+var sideCur = null, sideAlt = 0; // 측정하는 쪽(L/R) 고정용
 var heelTop = []; // 뒤꿈치 기준: 선 자세(동작 위쪽)에서 잰 뒤꿈치-발끝 높이차. 카메라 각도·원근으로 생기는 고정 차이를 빼기 위함
 function heelRel(f, angle) {
   if (f.heel == null) return null;
@@ -328,7 +329,7 @@ function heelRel(f, angle) {
 }
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.07-3"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.07-4"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -377,7 +378,7 @@ applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -1231,7 +1232,14 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
   }
   const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
   const visL = visOf(J.L), visR = visOf(J.R);
-  const side = visL >= visR ? "L" : "R", idx = J[side], tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
+  // 쪽 고정: 프레임마다 더 잘 보이는 쪽으로 바꾸면 비스듬한 촬영에서 왼팔·오른팔이 번갈아 잡혀 각도가 튐
+  // → 한 번 정한 쪽을 유지하고, 반대쪽이 확실히(+0.15) 더 잘 보이는 상태가 15프레임 이어질 때만 바꿈
+  let side;
+  if (!sideCur) { sideCur = visL >= visR ? "L" : "R"; sideAlt = 0; }
+  const vCur = sideCur === "L" ? visL : visR, vOth = sideCur === "L" ? visR : visL;
+  if (vOth > vCur + 0.15) { if (++sideAlt >= 15) { sideCur = sideCur === "L" ? "R" : "L"; sideAlt = 0; } } else sideAlt = 0;
+  side = sideCur;
+  const idx = J[side], tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
   const r = EX.joint === "knee" ? railTri(lm, side) : null;
   if (r) return { side, tri: r.tri, vis: Math.max(r.vis, Math.max(visL, visR)), raw: angleAt(r.tri[0], r.tri[1], r.tri[2]), J, railFilled: r.filled };
   return { side, tri, vis: Math.max(visL, visR), raw: angleAt(tri[0], tri[1], tri[2]), J };
@@ -1297,9 +1305,9 @@ function smoothFrames(frames, winN = PREC.medianWin) {
   return out;
 }
 // 3) 실시간 판정 상태 스냅샷/복원 — 재분석이 끝나면 화면 상태는 그대로
-function snapshotState() { return { heelTop: heelTop.slice(), hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
-function restoreState(s) { heelTop = s.heelTop || []; hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
-function resetJudgeState() { heelTop = []; hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
+function snapshotState() { return { sideCur, sideAlt, heelTop: heelTop.slice(), hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
+function restoreState(s) { sideCur = s.sideCur || null; sideAlt = s.sideAlt || 0; heelTop = s.heelTop || []; hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
+function resetJudgeState() { sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
 // 4) 재판정 (순수 함수: 영상 디코딩 없음 — frames = [{ t(ms), lm, wl }]). 기존 features/judge/finishRep 파이프라인 재사용, 2패스
 //    패스1 = learnRange 만 돌려 obsMin/obsMax 확보(자동 학습 기준이 첫 프레임부터 적용), 패스2 = 판정. thresholds() 우선순위는 그대로
 function reanalyzeFrames(frames, opts = {}) {
