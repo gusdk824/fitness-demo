@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.07-5 -->
+<!-- APP_VER: 11.07-7 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -238,7 +238,7 @@
 <div class="toast" id="toast"></div>
 
 <script type="module">
-import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+import { FilesetResolver, PoseLandmarker, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 
 // ───────── 관절·종목 정의 ─────────
 const LM = { LS:11, RS:12, LE:13, RE:14, LW:15, RW:16, LH:23, RH:24, LK:25, RK:26, LA:27, RA:28 };
@@ -246,6 +246,8 @@ const JOINT = {
   knee:  { L: [23,25,27], R: [24,26,28], label: "무릎 각도", minPhys: 30 },
   elbow: { L: [11,13,15], R: [12,14,16], label: "팔꿈치 각도", minPhys: 25 },
   hip:   { L: [11,23,25], R: [12,24,26], label: "고관절 각도", minPhys: 35 },
+  // 킥백: 몸통 선 기준 허벅지 각도(부호 있음). 180 = 허벅지가 몸통과 일직선, 180 초과 = 몸통 선보다 뒤로 찬 것. 차는 다리(더 뒤로 간 쪽)를 자동 선택
+  kick:  { kick: true, L: [11,23,25], R: [12,24,26], label: "고관절 폄 각도", minPhys: 90 },
   thighs:{ custom: true, label: "다리 벌림 각도", minPhys: 3 }, // 양 허벅지 사이 각도 (정면 촬영)
 };
 // romShort(가동범위 축소)는 플래그가 아닌 리포트 전용 체크 — 프로필/기준선이 있을 때만 advice에 표시됨
@@ -261,7 +263,10 @@ const EXERCISES = [
   { id:"latpull",   name:"랫풀다운",         joint:"elbow", low:70,  high:140, cam:"측면 또는 후면. 어깨~손이 보이게", cueLow:"더 당기세요", cueHigh:"팔을 거의 펴세요", checks:ALL.filter(c => c !== "lockout") },
   { id:"row",       name:"시티드 로우",       joint:"elbow", low:60,  high:140, cam:"측면. 어깨~손이 보이게", cueLow:"더 당기세요", cueHigh:"팔을 거의 펴세요", checks:[...ALL.filter(c => c !== "lockout"), "backRound"] },
   { id:"curl",      name:"바이셉 컬",         joint:"elbow", low:55,  high:150, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 내리세요", checks:ALL },
-  { id:"tricep",    name:"트라이셉 푸시다운", joint:"elbow", low:90,  high:160, cam:"측면. 어깨~손이 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 누르세요", checks:ALL },
+  { id:"tricep",    name:"트라이셉 푸시다운", joint:"elbow", low:90,  high:160, cam:"측면. 머리~엉덩이~손까지 보이게", cueLow:"더 올리세요", cueHigh:"끝까지 누르세요", checks:[...ALL, "elbowFix", "trunkMove", "wristBend"] },
+  { id:"kickback",  name:"케이블 킥백 (엉덩이)", joint:"kick", low:170, high:195, cam:"측면. 머리~발끝까지 전신이 보이게", cueLow:"다리를 끝까지 돌아오세요", cueHigh:"더 뒤로 차세요",
+    checks:["lockout","hold","tempo","trunkMove","fatigue"], holdSec:1,
+    tip:"상체를 살짝 숙이고 기둥을 잡아 몸통을 고정하세요. 허리를 꺾어 다리를 높이 올리지 말고, 엉덩이 힘으로만 뒤로 밀어 끝에서 1초 쪼이기. 돌아올 때는 천천히." },
   { id:"pushup",    name:"푸시업",           joint:"elbow", low:90,  high:155, cam:"측면. 전신이 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:ALL },
   { id:"outthigh",  name:"아웃타이 · 기본",  joint:"thighs", low:25, high:55, cam:"정면 또는 앞쪽 45도. 골반~무릎이 보이게", cueLow:"끝까지 모으세요", cueHigh:"더 벌리세요",
     checks:["lockout","hold","hip","tempo","fatigue","torsoSway","romShort"], holdSec:3,
@@ -280,7 +285,7 @@ const EXERCISES = [
     tip:"벤치에 견갑골 아래를 대고, 뒤꿈치가 무릎 바로 아래 오게. 복부로 복압을 잡고 엉덩이를 수직으로 올려 최고점에서 1초 강하게 쪼이기. 내려올 때 허리를 꺾거나 말지 말고 척추 각도 그대로 수평 이동." },
 ];
 const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 줄어듦", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치", heel:"뒤꿈치 뜸",
-  pelvis:"허리 말림", hipRise:"엉덩이 먼저 뜸", torsoSway:"상체 흔들림", kneeFwd:"무릎 전진", romShort:"가동범위 축소", backRound:"등 말림" };
+  pelvis:"허리 말림", hipRise:"엉덩이 먼저 뜸", torsoSway:"상체 흔들림", kneeFwd:"무릎 전진", romShort:"가동범위 축소", backRound:"등 말림", elbowFix:"팔꿈치 고정", trunkMove:"상체 고정", wristBend:"손목 꺾임" };
 // ── 공통 로직 체크 임계값 (추후 설정에서 조절 가능하게 한곳에 모음) ──
 const COMMON_TH = {
   pelvisDeg: 12,          // pelvis: 바닥 구간 몸통 기울기가 기준 대비 이만큼 이상 더 꺾이면 플래그
@@ -291,6 +296,9 @@ const COMMON_TH = {
   hipRiseRatio: 1.6,      // hipRise: 엉덩이 상승량 ≥ 어깨 상승량 × 1.6
   hipRiseLeanDeg: 10,     // hipRise: 그 사이 몸통이 10° 이상 더 앞으로
   hipRiseMinMove: 0.02,   // hipRise: 엉덩이 상승량 최소치(몸통 길이 비율) — 노이즈 방지
+  elbowFixDeg: 20,        // elbowFix: 반복 중 위팔-몸통 각도 변화 폭 (팔꿈치가 앞뒤로 움직임)
+  trunkMoveDeg: 10,       // trunkMove: 반복 중 몸통(어깨-엉덩이 선) 기울기 변화 폭
+  wristBendDeg: 35,       // wristBend: 아래팔 선과 손등 선(손목→가운데 손가락 뿌리) 사이 각도
   swayFrac: 0.06,         // torsoSway: 어깨 중심 x 또는 z 이동 폭 ≥ 몸통 길이의 6%
   swayCorr: 0.5,          // torsoSway: 다리 벌림 각과의 |상관| ≥ 0.5 이면 '다리와 같이 움직임'
   backRoundDeg: 25,       // backRound: (15°는 시선 앞에 둔 정상 데드리프트에서 15/18회 오탐 — 11/4 실측)
@@ -318,7 +326,27 @@ const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
-var lastOutWarn = 0;
+var lastOutWarn = 0, kickFacing = 1;
+// 손 관절(트라이셉 전용): MediaPipe Hand Landmarker (Apache-2.0). 2프레임에 한 번, 추적 중인 손목에 가장 가까운 손
+var handLm = null, handLoading = false, handPts = null, handT = 0, handTick = 0, wristEma = null;
+async function loadHand() {
+  if (handLm || handLoading) return; handLoading = true;
+  try {
+    if (!visionFiles) visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    const o = d => ({ baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: d }, runningMode: "VIDEO", numHands: 2 });
+    try { handLm = await HandLandmarker.createFromOptions(visionFiles, o("GPU")); } catch { handLm = await HandLandmarker.createFromOptions(visionFiles, o("CPU")); }
+  } catch (e) { console.warn("손 모델 로드 실패", e); } finally { handLoading = false; }
+}
+function detectHand(lm, side, t) {
+  if (!handLm) { loadHand(); return; }
+  if (++handTick % 2) return;
+  try {
+    const hr = handLm.detectForVideo(video, t), W = side === "R" ? lm[LM.RW] : lm[LM.LW];
+    let best = null, bd = 0.15;                                    // 손목에서 화면 15% 이내인 손만
+    for (const h of hr.landmarks || []) { const dd = dist(h[0], W); if (dd < bd) { bd = dd; best = h; } }
+    if (best) { handPts = best; handT = performance.now(); }
+  } catch {}
+}
 var sideCur = null, sideAlt = 0; // 측정하는 쪽(L/R) 고정용
 var heelTop = []; // 뒤꿈치 기준: 선 자세(동작 위쪽)에서 잰 뒤꿈치-발끝 높이차. 카메라 각도·원근으로 생기는 고정 차이를 빼기 위함
 function heelRel(f, angle) {
@@ -330,7 +358,7 @@ function heelRel(f, angle) {
 }
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.07-5"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.07-7"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -379,7 +407,7 @@ applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { wristEma = null; handPts = null; sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -778,6 +806,7 @@ function judgePeak(angle, conf, f) {
   setChk("hip", r.hipMove > 0.08 ? "on" : "");
   if (EX.lean && f.lean != null) setChk("lean", (EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min) ? "ok" : "on");
   if (EX.checks.includes("arch") && f.arch != null) setChk("arch", f.arch > 0.06 ? "on" : "");
+  if (EX.checks.includes("trunkMove") && f.trunk != null) { r.tkMin = Math.min(r.tkMin ?? 999, f.trunk); r.tkMax = Math.max(r.tkMax ?? -999, f.trunk); setChk("trunkMove", r.tkMax - r.tkMin > COMMON_TH.trunkMoveDeg ? "on" : "ok"); }
   trackCommon(r, angle, f, now);
 
   if (phase === "low") {
@@ -819,20 +848,22 @@ function finishPeakRep(r, low, high, holdSec) {
   if (EX.checks.includes("hip") && r.hipMove > 0.08) flags.push("hip");
   if (EX.checks.includes("arch") && (r.archMax || 0) > 0.06) flags.push("arch");
   if (EX.checks.includes("heel") && r.heelSeen && (r.heelMax || 0) > 0.08) flags.push("heel");
+  if (EX.checks.includes("trunkMove") && r.tkMax != null && r.tkMax - r.tkMin > COMMON_TH.trunkMoveDeg) flags.push("trunkMove");
   let feetMsg = null;
   if (EX.checks.includes("feet") && r.kneeAtPeak != null) { if (r.kneeAtPeak > 110) { flags.push("feet"); feetMsg = "발을 엉덩이 쪽으로 당기세요"; } else if (r.kneeAtPeak < 70) { flags.push("feet"); feetMsg = "발을 조금 앞으로 두세요"; } }
   const base = repList.slice(0, 2);
   if (EX.checks.includes("fatigue") && base.length === 2 && (base[0].max + base[1].max) / 2 - r.max > 8) flags.push("fatigue");
   commonFlags(r, flags); // 공통 로직 (torsoSway 등)
-  const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25 };
+  const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25, trunkMove:20 };
   const score = Math.max(0, 100 - flags.reduce((s, f) => s + (W[f] || 10), 0));
-  repList.push({ n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, sway: r.sway ?? null });
+  repList.push({ tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, sway: r.sway ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
-  const PRIO = ["arch","hip","heel","torsoSway","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
+  const PRIO = ["arch","trunkMove","hip","heel","torsoSway","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
   const CUE = { arch:"허리 꺾지 마세요, 척추 그대로", hip:"골반 떨어지지 않게", lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요", feet: feetMsg,
     slowReturn:"돌아올 때 더 천천히", hold:`정점에서 ${holdSec}초 버티세요`, lockout: EX.cueHigh, depth: EX.cueLow, tempo:"천천히", fatigue:"가동범위가 줄고 있어요", heel:"뒤꿈치 누르세요",
-    torsoSway:"상체는 고정, 다리만 움직이세요", backRound:"등이 말려요 — 가슴 펴고 시선은 앞 바닥" };
+    torsoSway:"상체는 고정, 다리만 움직이세요", backRound:"등이 말려요 — 가슴 펴고 시선은 앞 바닥",
+    trunkMove: EX.id === "kickback" ? "허리 꺾지 말고 상체 고정" : "상체 흔들지 마세요" };
   speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
 }
 
@@ -880,6 +911,12 @@ function accumulate(r, angle, conf, f, now) {
   const hr = heelRel(f, angle); if (hr != null) { r.heelMax = Math.max(r.heelMax || 0, hr); r.heelSeen = true; }
   setChk("hip", r.hipMove > 0.08 ? "on" : ""); setChk("sym", r.symDiff > 15 ? "on" : ""); setChk("valgus", (r.valgus && r.valgus < 0.75) ? "on" : "");
   if (EX.checks.includes("heel")) setChk("heel", hr == null ? "" : (hr > 0.08 ? "on" : "ok"));
+  if (EX.id === "tricep") {
+    const T = COMMON_TH;
+    if (f.uarm != null) { r.uaMin = Math.min(r.uaMin ?? 999, f.uarm); r.uaMax = Math.max(r.uaMax ?? -999, f.uarm); setChk("elbowFix", r.uaMax - r.uaMin > T.elbowFixDeg ? "on" : "ok"); }
+    if (f.trunk != null) { r.tkMin = Math.min(r.tkMin ?? 999, f.trunk); r.tkMax = Math.max(r.tkMax ?? -999, f.trunk); setChk("trunkMove", r.tkMax - r.tkMin > T.trunkMoveDeg ? "on" : "ok"); }
+    if (f.wrist != null) { r.wrMax = Math.max(r.wrMax ?? 0, f.wrist); setChk("wristBend", r.wrMax > T.wristBendDeg ? "on" : "ok"); }
+  }
   trackCommon(r, angle, f, now);
 }
 function finishRep(r, low, high) {
@@ -893,6 +930,9 @@ function finishRep(r, low, high) {
   if (EX.checks.includes("sym") && r.symDiff > 15) flags.push("sym");
   if (EX.checks.includes("valgus") && r.valgus && r.valgus < 0.75) flags.push("valgus");
   if (EX.checks.includes("heel") && r.heelSeen && (r.heelMax || 0) > 0.08) flags.push("heel");
+  if (EX.checks.includes("elbowFix") && r.uaMax != null && r.uaMax - r.uaMin > COMMON_TH.elbowFixDeg) flags.push("elbowFix");
+  if (EX.checks.includes("trunkMove") && r.tkMax != null && r.tkMax - r.tkMin > COMMON_TH.trunkMoveDeg) flags.push("trunkMove");
+  if (EX.checks.includes("wristBend") && r.wrMax != null && r.wrMax > COMMON_TH.wristBendDeg) flags.push("wristBend");
   const base = repList.slice(0, 2);
   if (EX.checks.includes("fatigue") && base.length === 2) {
     const b = (base[0].min + base[1].min) / 2, bmax = (base[0].max + base[1].max) / 2;
@@ -906,17 +946,18 @@ function finishRep(r, low, high) {
     if (!ok) flags.push("lean");
   }
   commonFlags(r, flags); // 공통 로직 (pelvis / hipRise / torsoSway)
-  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25 }[f] || 10), 0));
-  repList.push({ n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, pelvisDelta: r.pelvisDelta ?? null, sway: r.sway ?? null, backRoundDelta: r.backRoundDelta ?? null });
+  const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25, elbowFix:15, trunkMove:15, wristBend:10 }[f] || 10), 0));
+  repList.push({ uaRange: r.uaMax != null ? r.uaMax - r.uaMin : null, tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, wrMax: r.wrMax ?? null, n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, pelvisDelta: r.pelvisDelta ?? null, sway: r.sway ?? null, backRoundDelta: r.backRoundDelta ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
-  const PRIO = ["pelvis","backRound","hip","hipRise","valgus","heel","torsoSway","lean","hold","tempo","depth","lockout","sym","fatigue"];
+  const PRIO = ["pelvis","backRound","hip","hipRise","valgus","heel","trunkMove","elbowFix","wristBend","torsoSway","lean","hold","tempo","depth","lockout","sym","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
   const th = EX.joint === "thighs";
   const CUE = { hip: th ? "골반 떨어지지 않게" : "엉덩이 붙이세요", valgus:"무릎 벌리세요", tempo: ecc < 0.5 ? (th ? "천천히 모으세요" : "천천히 내리세요") : "반동 쓰지 마세요", depth: EX.cueLow, lockout: EX.cueHigh, sym:"양쪽 같이 미세요", fatigue:"가동범위가 줄고 있어요",
     hold: `벌린 채 ${EX.holdSec}초 버티세요`, lean: EX.lean?.dir === "back" ? "상체 더 눕히세요" : "상체 더 숙이세요", heel:"뒤꿈치 누르세요",
     pelvis:"바닥에서 허리가 말려요 — 조금 덜 내리거나 코어를 잡으세요",
     hipRise: EX.id === "deadlift" ? "엉덩이가 먼저 떠요 — 바가 무릎 지날 때까지 엉덩이 높이 유지" : "엉덩이가 먼저 떠요 — 가슴과 엉덩이를 같이 올리세요",
-    torsoSway:"상체는 고정, 다리만 움직이세요", backRound:"등이 말려요 — 가슴 펴고 시선은 앞 바닥" };
+    torsoSway:"상체는 고정, 다리만 움직이세요", backRound:"등이 말려요 — 가슴 펴고 시선은 앞 바닥",
+    elbowFix:"팔꿈치를 옆구리에 붙이세요", trunkMove:"상체 흔들지 마세요", wristBend:"손목 펴세요" };
   speak(top ? `${reps}회, ${CUE[top]}` : `${reps}회`, top ? "warn" : "good");
 }
 
@@ -1008,6 +1049,9 @@ function renderReport(list, meta = { mode: "live" }) {
     heel: "뒤꿈치가 떠요. 보통 발목 가동성이 부족하거나 무게중심이 앞으로 쏠릴 때 나타나요. 발바닥 전체로 누르고, 발 위치를 조금 높이거나(레그프레스) 발목 스트레칭을 해보세요.",
     pelvis: "바닥에서 허리가 말려요(벗윙크). 허리 부담이 큰 패턴이에요. 말리기 직전 깊이까지만 내리거나, 복압을 잡고 코어를 고정한 채 내려가세요. 무게를 낮추는 것도 도움이 돼요.",
     hipRise: EX.id === "deadlift" ? "올라올 때 엉덩이가 먼저 떠서 상체가 더 숙여져요(굿모닝 자세). 바가 무릎을 지날 때까지 엉덩이 높이를 유지하고, 가슴과 엉덩이가 같이 올라가게 하세요." : "올라올 때 엉덩이가 먼저 떠서 상체가 앞으로 쏠려요. 가슴과 엉덩이를 같은 속도로 올리고, 발바닥 전체로 바닥을 밀어보세요.",
+    elbowFix: "팔꿈치가 앞뒤로 움직여요. 위팔이 같이 움직이면 어깨·등이 일을 나눠 가져서 삼두에 덜 걸려요. 팔꿈치를 옆구리에 붙이고 아래팔만 움직이세요.",
+    trunkMove: EX.id === "kickback" ? "다리를 찰 때 상체가 같이 들리거나 허리가 꺾여요. 엉덩이 대신 허리로 다리를 올리는 거예요. 기둥을 잡고 상체 각도를 고정한 채, 다리는 허리가 꺾이기 직전까지만 차세요." : "누를 때 상체가 같이 숙여지거나 흔들려요. 체중으로 누르는 반동이에요. 상체 각도를 고정하고 무게를 조금 낮춰보세요.",
+    wristBend: "손목이 꺾여요. 손목이 꺾이면 힘이 손목으로 새고 부담이 커요. 손등과 아래팔이 일직선이 되게 유지하세요.",
     torsoSway: "다리를 움직일 때 상체가 같이 흔들려요. 등받이에 상체를 고정하고 손잡이를 잡아 상체는 멈춘 채 다리만 움직이세요. 무게를 낮추면 고정이 쉬워져요.",
   };
   const th = !!EX.holdSec;
@@ -1060,6 +1104,11 @@ function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
   ctx.lineWidth = 7; ctx.strokeStyle = (phase === "low" && !EX.holdSec) || phase === "peak" ? "#3ddc84" : phase === "return" ? "#4fc3f7" : "#ffb020";
   ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
   for (const p of [a, b, c]) { ctx.beginPath(); ctx.arc(p.x, p.y, 8, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill(); }
+  if (EX.id === "tricep" && handPts && performance.now() - handT < 300) { // 손목·검지·중지 관절 + 새끼 뿌리
+    ctx.strokeStyle = "rgba(255,105,180,.9)"; ctx.lineWidth = 3;
+    for (const ch of [[0,5,6,7],[0,9,10,11],[0,17],[5,9,13,17]]) { ctx.beginPath(); ch.forEach((i, k) => { const p = Q(handPts[i]); k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); }); ctx.stroke(); }
+    for (const i of [0,5,6,7,9,10,11,17]) { const p = Q(handPts[i]); ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fillStyle = "#ff69b4"; ctx.fill(); }
+  }
   if (hipAnchor && EX.checks.includes("hip")) { ctx.strokeStyle = "rgba(255,176,32,.7)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(hipAnchor.x * canvas.width, hipAnchor.y * canvas.height, 14, 0, Math.PI * 2); ctx.stroke(); }
 }
 function features(lm, side, wl) {
@@ -1073,6 +1122,21 @@ function features(lm, side, wl) {
     const hm = { y: (wl[LM.LH].y + wl[LM.RH].y) / 2, z: (wl[LM.LH].z + wl[LM.RH].z) / 2 };
     const up = hm.y - sm.y, back = sm.z - hm.z; // y는 아래가 +, z는 카메라에서 멀어질수록 +
     if (up > 0.05) f.lean = Math.atan2(back, up) * 180 / Math.PI;
+  }
+  // 트라이셉: 위팔-몸통 각도(팔꿈치 고정), 몸통 기울기(상체 고정), 손목 꺾임(손 모델)
+  if (EX.id === "kickback" && (H.visibility ?? 1) > 0.5 && (S.visibility ?? 1) > 0.5) f.trunk = Math.atan2(S.x - H.x, H.y - S.y) * 180 / Math.PI;
+  if (EX.id === "tricep") {
+    const E = side === "R" ? lm[LM.RE] : lm[LM.LE], Wp = side === "R" ? lm[LM.RW] : lm[LM.LW];
+    if ((H.visibility ?? 1) > 0.5 && (S.visibility ?? 1) > 0.5) {
+      f.trunk = Math.atan2(S.x - H.x, H.y - S.y) * 180 / Math.PI;
+      if ((E.visibility ?? 1) > 0.5) f.uarm = angleAt(E, S, H);
+    }
+    if (handPts && !precBusy && performance.now() - handT < 300 && (E.visibility ?? 1) > 0.5 && (Wp.visibility ?? 1) > 0.3) {
+      const fa = { x: Wp.x - E.x, y: Wp.y - E.y }, hv = { x: handPts[9].x - handPts[0].x, y: handPts[9].y - handPts[0].y };
+      const c = (fa.x * hv.x + fa.y * hv.y) / ((Math.hypot(fa.x, fa.y) * Math.hypot(hv.x, hv.y)) || 1);
+      const w = Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
+      wristEma = wristEma == null ? w : wristEma * 0.6 + w * 0.4; f.wrist = wristEma;
+    }
   }
   // 힙쓰러스트용: 허리 꺾임(엉덩이가 어깨-무릎 선보다 위로 솟음) + 정점 무릎 각도(발 위치)
   // 뒤꿈치 뜸: 측면에서 뒤꿈치(29/30)가 발끝(31/32)보다 위로 올라간 정도를 정강이 길이로 정규화. 발이 안 보이면 null (체크 자동 꺼짐)
@@ -1233,6 +1297,17 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
   }
   const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
   const visL = visOf(J.L), visR = visOf(J.R);
+  if (J.kick) {
+    // 보는 방향: 코가 어깨 중심보다 오른쪽이면 +1. 뒤쪽 = 반대 방향
+    const shx = (lm[LM.LS].x + lm[LM.RS].x) / 2, facing = (lm[0].visibility ?? 1) > 0.3 ? Math.sign(lm[0].x - shx) || 1 : (kickFacing || 1);
+    kickFacing = facing;
+    const val = t => { const S = lm[t[0]], H = lm[t[1]], K = lm[t[2]];
+      const v1 = { x: H.x - S.x, y: H.y - S.y }, v2 = { x: K.x - H.x, y: K.y - H.y };
+      return 180 + facing * Math.atan2(v1.x * v2.y - v1.y * v2.x, v1.x * v2.x + v1.y * v2.y) * 180 / Math.PI; };
+    const aL = visL > 0.3 ? val(J.L) : -1, aR = visR > 0.3 ? val(J.R) : -1;
+    const side = aL >= aR ? "L" : "R", idx = J[side];
+    return { side, tri: [lm[idx[0]], lm[idx[1]], lm[idx[2]]], vis: Math.max(visL, visR), raw: Math.max(aL, aR), J };
+  }
   // 쪽 고정: 프레임마다 더 잘 보이는 쪽으로 바꾸면 비스듬한 촬영에서 왼팔·오른팔이 번갈아 잡혀 각도가 튐
   // → 한 번 정한 쪽을 유지하고, 반대쪽이 확실히(+0.15) 더 잘 보이는 상태가 15프레임 이어질 때만 바꿈
   let side;
@@ -1454,6 +1529,7 @@ function loop() {
     noPersonSince = 0;
     const lm = res.landmarks[0], J = JOINT[EX.joint];
     const { side, tri, vis, raw, out } = measureFrame(lm);
+    if (EX.id === "tricep") detectHand(lm, side, t);
     // 손·발이 화면 밖으로 나가면 안내 (숄더 프레스 끝에서 손이 위로 잘리는 경우 등) — 8초에 한 번
     if (out && calib.done && t - lastOutWarn > 8000) { lastOutWarn = t; toast(tri[2].y < 0.1 ? "손이 화면 위로 나가요 — 폰을 조금 뒤로 두세요" : "관절이 화면 밖으로 나가요 — 몸 전체가 보이게 해 주세요"); }
     $("side").textContent = J.custom ? "양쪽 허벅지" : (side === "L" ? "왼쪽 " : "오른쪽 ") + J.label.replace(" 각도", "");
