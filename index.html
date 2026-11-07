@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.07-2 -->
+<!-- APP_VER: 11.07-3 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -279,7 +279,7 @@ const EXERCISES = [
     checks:["lockout","hold","arch","feet","heel","depth","tempo","fatigue","romShort"], holdSec:1,
     tip:"벤치에 견갑골 아래를 대고, 뒤꿈치가 무릎 바로 아래 오게. 복부로 복압을 잡고 엉덩이를 수직으로 올려 최고점에서 1초 강하게 쪼이기. 내려올 때 허리를 꺾거나 말지 말고 척추 각도 그대로 수평 이동." },
 ];
-const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 유지", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치", heel:"뒤꿈치 뜸",
+const CHECK_LABEL = { depth:"가동범위", lockout:"끝까지 폄", tempo:"반동/속도", hip:"엉덩이 고정", sym:"좌우 대칭", valgus:"무릎 모임", fatigue:"가동범위 줄어듦", hold:"정점 버티기", lean:"상체 기울기", slowReturn:"천천히 복귀", arch:"허리 꺾임", feet:"발 위치", heel:"뒤꿈치 뜸",
   pelvis:"허리 말림", hipRise:"엉덩이 먼저 뜸", torsoSway:"상체 흔들림", kneeFwd:"무릎 전진", romShort:"가동범위 축소", backRound:"등 말림" };
 // ── 공통 로직 체크 임계값 (추후 설정에서 조절 가능하게 한곳에 모음) ──
 const COMMON_TH = {
@@ -328,7 +328,7 @@ function heelRel(f, angle) {
 }
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.07-2"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.07-3"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -955,10 +955,12 @@ function renderReport(list, meta = { mode: "live" }) {
   const isTh = !!EX.holdSec; // 정점 버티기형은 '최대 각도'가 핵심
   const avgScore = avg(repList.map(r => r.score)), avgMin = isTh ? avg(repList.map(r => r.max)) : avg(repList.map(r => r.min));
   const first = repList.slice(0, Math.min(3, n)), last = repList.slice(-Math.min(3, n));
-  const romKeep = n < 4 ? null : isTh
-    ? Math.round(Math.min(100, avg(last.map(r => r.max)) / Math.max(1, avg(first.map(r => r.max))) * 100))
-    : Math.round(100 - Math.max(0, avg(last.map(r => r.min)) - avg(first.map(r => r.min))) / Math.max(1, 180 - avg(first.map(r => r.min))) * 100);
-  const tempo = avg(repList.map(r => r.ecc)).toFixed(1) + "s / " + avg(repList.map(r => r.con)).toFixed(1) + "s";
+  // 가동범위 유지 = '가동범위 줄어듦' 표시가 없는 반복 수 (반복별 표시와 같은 기준이라 서로 어긋나지 않음)
+  const fatN = repList.filter(r => r.flags.includes("fatigue")).length;
+  const romKeep = n < 4 || !EX.checks.includes("fatigue") ? null : Math.round((n - fatN) / n * 100);
+  // 템포는 중앙값 — 첫 반복 전 준비 시간이나 중간에 쉰 시간이 평균을 부풀리지 않게
+  const med = a => { const b = [...a].sort((x, y) => x - y), m = b.length >> 1; return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
+  const tempo = med(repList.map(r => r.ecc)).toFixed(1) + "s / " + med(repList.map(r => r.con)).toFixed(1) + "s";
   const cnt = {}; repList.forEach(r => r.flags.forEach(f => cnt[f] = (cnt[f] || 0) + 1));
   // kneeFwd(리포트 전용 정보): 바닥에서 무릎이 발끝을 넘은 정도(정강이 길이 %)의 평균. 측정 안 되면 KPI 생략
   const kfList = repList.map(r => r.kneeFwd).filter(v => v != null);
@@ -968,7 +970,7 @@ function renderReport(list, meta = { mode: "live" }) {
     <div class="kpi"><b class="${avgScore >= 80 ? "ok" : "bad"}">${avgScore.toFixed(0)}</b><span>평균 점수</span></div>
     <div class="kpi"><b>${avgMin.toFixed(0)}°</b><span>${isTh ? (EX.joint === "thighs" ? "평균 최대 벌림" : "평균 최고 각도") : "평균 최저 각도"}</span></div>
     ${isTh ? `<div class="kpi"><b>${avg(repList.map(r => r.hold || 0)).toFixed(1)}s</b><span>평균 버티기</span></div><div class="kpi"><b>${avg(repList.map(r => r.ret || 0)).toFixed(1)}s</b><span>평균 복귀 시간</span></div>` : `<div class="kpi"><b style="font-size:16px">${tempo}</b><span>템포 ↓/↑</span></div>`}
-    ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${romKeep}%</b><span>가동범위 유지</span></div>` : ""}
+    ${romKeep != null ? `<div class="kpi"><b class="${romKeep >= 90 ? "ok" : "bad"}">${n - fatN}/${n}회</b><span>가동범위 유지</span></div>` : ""}
     ${(() => { const cl = repList.map(r => r.conf).filter(v => v != null); if (!cl.length) return ""; const c = Math.round(avg(cl) * 100); return `<div class="kpi"><b class="${c >= 75 ? "ok" : "bad"}">${c}%</b><span>인식 신뢰도</span></div>${c < 75 ? `<div style="grid-column:1/-1;font-size:12px;color:var(--muted)">관절 인식이 흔들렸어요 — 횟수·각도 외 세부 체크는 참고만 하세요. 카메라를 더 멀리, 몸 전체가 보이게 두면 좋아져요.</div>` : ""}`; })()}
     ${kneeFwdPct != null ? `<div class="kpi"><b>${kneeFwdPct >= 0 ? kneeFwdPct + "%" : "발끝 뒤"}</b><span>무릎 전진</span></div><div style="grid-column:1/-1;font-size:12px;color:var(--muted)">무릎이 발끝을 넘는 건 정상이에요 (발뒤꿈치가 붙어 있으면 OK)</div>` : ""}`;
   // pelvis(허리 말림)는 위험도 높음 → 한 번이라도 나오면 advice 최우선
@@ -991,7 +993,10 @@ function renderReport(list, meta = { mode: "live" }) {
     hip: "엉덩이가 등받이에서 떠요. 허리 부담이 커지니 가동범위를 줄이거나 발 위치를 조정하세요.",
     sym: "좌우가 다르게 움직여요. 약한 쪽을 의식해서 같이 밀어보세요.",
     valgus: "무릎이 안쪽으로 모여요. 발끝 방향으로 무릎을 벌린다는 느낌으로 미세요.",
-    fatigue: "세트 후반에 가동범위가 줄었어요. 반복 수를 줄이거나 휴식을 늘려보세요.",
+    fatigue: (() => { const ids = repList.filter(r => r.flags.includes("fatigue")).map(r => r.n), late = ids.filter(i => i > n / 2).length;
+      return late * 2 > ids.length
+        ? `세트 후반에 가동범위가 줄었어요 (${ids.map(i => "#" + i).join("·")}). 반복 수를 줄이거나 휴식을 늘려보세요.`
+        : `첫 두 반복보다 덜 움직인 반복이 있어요 (${ids.map(i => "#" + i).join("·")}). 매번 같은 깊이까지 가 보세요.`; })(),
     hold: `정점에서 버티는 시간이 짧아요. 벌린 끝에서 ${EX.holdSec || 3}초를 세고 돌아오세요. 무게를 낮추면 버티기가 쉬워져요.`,
     lean: EX.lean?.dir === "back" ? "상체가 충분히 뒤로 눕지 않았어요. 등받이에 기대 배꼽이 천장을 보게 하고, 골반은 들어 올린 채 유지하세요." : "상체가 충분히 앞으로 기울지 않았어요. 고관절을 접어 배꼽이 바닥을 보게, 척추는 45도 방향으로 길게 유지하세요.",
     slowReturn: "돌아올 때 너무 빨라요. 이 동작은 돌아오는 구간이 핵심이에요. 버티면서 1초 이상 천천히, 다리뼈가 길어지는 느낌으로 돌아오세요.",
