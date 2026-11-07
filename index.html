@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.06-2 -->
+<!-- APP_VER: 11.07-2 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -251,7 +251,7 @@ const JOINT = {
 // romShort(가동범위 축소)는 플래그가 아닌 리포트 전용 체크 — 프로필/기준선이 있을 때만 advice에 표시됨
 const ALL = ["depth","lockout","tempo","sym","fatigue","romShort"];
 const EXERCISES = [
-  { id:"legpress",  name:"레그프레스",       joint:"knee",  low:95,  high:155, cam:"측면. 머신 옆에 세우고 엉덩이~발이 다 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:[...ALL,"hip","valgus","heel","pelvis","kneeFwd"] }, // kneeFwd: 리포트 전용(정보), 플래그 없음
+  { id:"legpress",  name:"레그프레스",       joint:"knee",  low:95,  high:155, cam:"측면. 머신 옆에 세우고 엉덩이~발이 다 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 미세요", checks:[...ALL,"hip","valgus","pelvis","kneeFwd"] }, // kneeFwd: 리포트 전용(정보), 플래그 없음. heel 제외: 발판이 기울어 있어 뒤꿈치·발끝 높이 차가 항상 생김 → 9/9 오탐 (11/7 실측)
   { id:"squat",     name:"스쿼트",           joint:"knee",  low:100, high:160, cam:"측면 또는 45도. 전신이 보이게", cueLow:"더 앉으세요", cueHigh:"끝까지 일어나세요", checks:[...ALL,"valgus","heel","pelvis","hipRise","kneeFwd"] }, // kneeFwd: 리포트 전용
   { id:"legext",    name:"레그 익스텐션",     joint:"knee",  low:100, high:160, cam:"측면. 허벅지와 정강이가 보이게", cueLow:"더 내리세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"] },
   { id:"legcurl",   name:"레그 컬",          joint:"knee",  low:80,  high:150, cam:"측면. 엎드린 채 다리 전체가 보이게", cueLow:"더 당기세요", cueHigh:"끝까지 펴세요", checks:[...ALL,"hip"] },
@@ -318,9 +318,17 @@ const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
+var heelTop = []; // 뒤꿈치 기준: 선 자세(동작 위쪽)에서 잰 뒤꿈치-발끝 높이차. 카메라 각도·원근으로 생기는 고정 차이를 빼기 위함
+function heelRel(f, angle) {
+  if (f.heel == null) return null;
+  if (angle >= getHigh() - 15) { heelTop.push(f.heel); if (heelTop.length > 60) heelTop.shift(); }
+  if (heelTop.length < 5) return null;                       // 기준이 없으면 판정 안 함
+  const b = [...heelTop].sort((x, y) => x - y)[Math.floor(heelTop.length / 2)];
+  return f.heel - b;                                          // +면 선 자세보다 뒤꿈치가 더 들림
+}
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.06-2"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.07-2"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -369,7 +377,7 @@ applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -764,7 +772,7 @@ function judgePeak(angle, conf, f) {
     r.hipMove = Math.max(r.hipMove, mv / (torsoLen || 1)); // 평활된 엉덩이 위치로 비교 (점 떨림으로 인한 오탐 방지)
   }
   if (f.arch != null) r.archMax = Math.max(r.archMax || 0, f.arch);
-  if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; if (EX.checks.includes("heel")) setChk("heel", f.heel > 0.08 ? "on" : "ok"); }
+  { const hr = heelRel(f, angle); if (hr != null) { r.heelMax = Math.max(r.heelMax || 0, hr); r.heelSeen = true; if (EX.checks.includes("heel")) setChk("heel", hr > 0.08 ? "on" : "ok"); } }
   setChk("hip", r.hipMove > 0.08 ? "on" : "");
   if (EX.lean && f.lean != null) setChk("lean", (EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min) ? "ok" : "on");
   if (EX.checks.includes("arch") && f.arch != null) setChk("arch", f.arch > 0.06 ? "on" : "");
@@ -867,9 +875,9 @@ function accumulate(r, angle, conf, f, now) {
   }
   if (f.symDiff != null) r.symDiff = Math.max(r.symDiff, f.symDiff);
   if (f.valgus != null) r.valgus = Math.min(r.valgus || 9, f.valgus);
-  if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; }
+  const hr = heelRel(f, angle); if (hr != null) { r.heelMax = Math.max(r.heelMax || 0, hr); r.heelSeen = true; }
   setChk("hip", r.hipMove > 0.08 ? "on" : ""); setChk("sym", r.symDiff > 15 ? "on" : ""); setChk("valgus", (r.valgus && r.valgus < 0.75) ? "on" : "");
-  if (EX.checks.includes("heel")) setChk("heel", f.heel == null ? "" : (f.heel > 0.08 ? "on" : "ok"));
+  if (EX.checks.includes("heel")) setChk("heel", hr == null ? "" : (hr > 0.08 ? "on" : "ok"));
   trackCommon(r, angle, f, now);
 }
 function finishRep(r, low, high) {
@@ -1284,9 +1292,9 @@ function smoothFrames(frames, winN = PREC.medianWin) {
   return out;
 }
 // 3) 실시간 판정 상태 스냅샷/복원 — 재분석이 끝나면 화면 상태는 그대로
-function snapshotState() { return { hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
-function restoreState(s) { hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
-function resetJudgeState() { hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
+function snapshotState() { return { heelTop: heelTop.slice(), hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
+function restoreState(s) { heelTop = s.heelTop || []; hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
+function resetJudgeState() { heelTop = []; hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
 // 4) 재판정 (순수 함수: 영상 디코딩 없음 — frames = [{ t(ms), lm, wl }]). 기존 features/judge/finishRep 파이프라인 재사용, 2패스
 //    패스1 = learnRange 만 돌려 obsMin/obsMax 확보(자동 학습 기준이 첫 프레임부터 적용), 패스2 = 판정. thresholds() 우선순위는 그대로
 function reanalyzeFrames(frames, opts = {}) {
@@ -1578,7 +1586,10 @@ paintFacing();
 
 let visionFiles = null;
 // 실시간 인식 모델: lite 는 빠르지만 관절 정확도가 낮음 → 기본을 full 로. 설정에서 변경 (formcoach.model)
-let modelKind = (() => { try { return localStorage.getItem("formcoach.model") || "movenet"; } catch { return "movenet"; } })();
+let modelKind = (() => { try {
+  // 한 번만: 예전에 저장된 MediaPipe 선택을 새 기본값 MoveNet 으로 바꿈 (이후 설정에서 고른 값은 유지)
+  if (!localStorage.getItem("formcoach.modelMig1")) { localStorage.setItem("formcoach.model", "movenet"); localStorage.setItem("formcoach.modelMig1", "1"); }
+  return localStorage.getItem("formcoach.model") || "movenet"; } catch { return "movenet"; } })();
 // ── MoveNet Thunder (Google, Apache-2.0) 어댑터 ─────────────────────────────
 // MediaPipe 와 같은 모양(landmarks[0] = 33점, x·y 정규화, visibility)으로 돌려줘서 나머지 코드는 그대로 동작.
 // MoveNet 점수는 MediaPipe visibility 보다 낮게 나옴 → 권장 임계 0.3 이 앱 임계 0.6(CONF_TH)에 오도록 ×2 환산.
