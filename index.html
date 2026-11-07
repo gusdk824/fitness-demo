@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.04-7 -->
+<!-- APP_VER: 11.06-2 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -182,6 +182,9 @@
     </div>
     <div class="section">운동</div>
     <div class="field"><span>운동 종목</span><select id="exSel"></select></div>
+    <div class="field" id="machineField" hidden><span>기계</span><select id="machineSel">
+      <option value="">기계 정보 없음 (일반)</option>
+      <option value="arsenal_linear">Arsenal Reloaded Linear · 35° 썰매</option></select></div>
     <div class="src" id="thSrc"></div>
     <div class="camhint" id="camHint"></div>
     <div class="camhint" id="tip" style="color:var(--fg);background:rgba(255,255,255,.06)" hidden></div>
@@ -206,6 +209,8 @@
     <div class="section">기타</div>
     <button class="ghost" id="resetBtn">카운트 초기화</button>
     <button class="ghost" id="recalBtn">사람 다시 인식 (기준 재학습)</button>
+    <label class="field"><span>인식 모델 <b id="modelVal"></b></span>
+      <select id="modelSel"><option value="movenet">MoveNet (기본 · 기계 운동에 강함)</option><option value="lite">MediaPipe 빠름 (lite) — 오래된 폰</option><option value="full">MediaPipe 정확 (full) — 상체 기울기(아웃타이) 필요할 때</option><option value="heavy">MediaPipe 최고 (heavy) — PC·최신 폰</option></select></label>
     <button class="ghost" id="cpuBtn">인식이 안 될 때: 엔진 CPU 모드로 전환</button>
     <div style="font-size:12px;color:var(--muted);line-height:1.5">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b> · 상체 <b id="leanDbg">-</b><br>영상은 기기 안에서만 처리되며 저장·전송되지 않습니다.</div>
   </div>
@@ -312,9 +317,10 @@ const win = [];
 const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
+var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.04-7"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.06-2"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -352,13 +358,18 @@ function applyExercise(id) {
   $("tip0").textContent = EX.tip || ""; $("tip0").hidden = !EX.tip;
   resetSet(); setNo = 1;
 }
-exSel.onchange = () => { applyExercise(exSel.value); toast(EX.name); if (typeof paintSrc === "function") paintSrc(); };
-exSel0.onchange = () => applyExercise(exSel0.value);
+exSel.onchange = () => { applyExercise(exSel.value); toast(EX.name); if (typeof paintSrc === "function") paintSrc(); paintMachine(); };
+function paintMachine() {
+  $("machineField").hidden = EX.id !== "legpress"; $("machineSel").value = machineId;
+}
+$("machineSel").onchange = e => { machineId = e.target.value; try { localStorage.setItem("formcoach.machine", machineId); } catch {} resetRail();
+  toast(machineId ? "기계 등록: " + MACHINES[machineId].name + " — 엉덩이 고정·레일 제약 적용" : "기계 정보 없이 측정"); };
+exSel0.onchange = () => { applyExercise(exSel0.value); paintMachine(); };
 applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -744,10 +755,14 @@ function judgePeak(angle, conf, f) {
   const low = getLow(), high = getHigh(), now = clock();
   const holdSec = +($("holdTh")?.value || EX.holdSec);
   if (phase === null) { phase = angle > (low + high) / 2 ? "peak" : "low"; return; }
-  if (!cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
+  if (!cur) { cur = newRep(now, angle, conf); hipAnchor = hipEma ? { ...hipEma } : f.hip; torsoLen = Math.max(f.torso, f.thighLen || 0); }
   const r = cur;
   r.min = Math.min(r.min, angle); r.max = Math.max(r.max, angle); r.confSum += conf; r.confN++;
-  if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
+  if (hipAnchor && hipEma) {
+    // 기계 등록 레그프레스: 의자에서 '위로' 뜬 것만 (앞뒤 미끄러짐·관절점 위치 변화 제외). 나머지 종목: 모든 방향
+    const mv = (EX.id === "legpress" && MACHINES[machineId]) ? Math.max(0, hipAnchor.y - hipEma.y) : dist(hipEma, hipAnchor);
+    r.hipMove = Math.max(r.hipMove, mv / (torsoLen || 1)); // 평활된 엉덩이 위치로 비교 (점 떨림으로 인한 오탐 방지)
+  }
   if (f.arch != null) r.archMax = Math.max(r.archMax || 0, f.arch);
   if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; if (EX.checks.includes("heel")) setChk("heel", f.heel > 0.08 ? "on" : "ok"); }
   setChk("hip", r.hipMove > 0.08 ? "on" : "");
@@ -816,7 +831,7 @@ function judge(angle, conf, f) {
   const low = getLow(), high = getHigh(), now = clock();
   if (phase === null) { phase = angle > (low + high) / 2 ? "high" : "low"; return; }
   if (phase === "high") {
-    if (angle < high - 10 && !cur) { cur = newRep(now, angle, conf); hipAnchor = f.hip; torsoLen = f.torso; }
+    if (angle < high - 10 && !cur) { cur = newRep(now, angle, conf); hipAnchor = hipEma ? { ...hipEma } : f.hip; torsoLen = Math.max(f.torso, f.thighLen || 0); }
     if (angle < low) { phase = "low"; speak("좋아요", "good"); setChk("depth", "ok"); }
     else if (cur && angle < high - 10 && now - lastSpeak > 2000) hint(EX.cueLow, "warn");
     if (cur) accumulate(cur, angle, conf, f, now);
@@ -845,7 +860,11 @@ function accumulate(r, angle, conf, f, now) {
     const need = EX.lean.dir === "back" ? f.lean >= EX.lean.min : -f.lean >= EX.lean.min;
     setChk("lean", need ? "ok" : "on");
   }
-  if (hipAnchor && f.hip) r.hipMove = Math.max(r.hipMove, dist(f.hip, hipAnchor) / (torsoLen || 1));
+  if (hipAnchor && hipEma) {
+    // 기계 등록 레그프레스: 의자에서 '위로' 뜬 것만 (앞뒤 미끄러짐·관절점 위치 변화 제외). 나머지 종목: 모든 방향
+    const mv = (EX.id === "legpress" && MACHINES[machineId]) ? Math.max(0, hipAnchor.y - hipEma.y) : dist(hipEma, hipAnchor);
+    r.hipMove = Math.max(r.hipMove, mv / (torsoLen || 1)); // 평활된 엉덩이 위치로 비교 (점 떨림으로 인한 오탐 방지)
+  }
   if (f.symDiff != null) r.symDiff = Math.max(r.symDiff, f.symDiff);
   if (f.valgus != null) r.valgus = Math.min(r.valgus || 9, f.valgus);
   if (f.heel != null) { r.heelMax = Math.max(r.heelMax || 0, f.heel); r.heelSeen = true; }
@@ -1021,7 +1040,7 @@ function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
   const P = i => ({ x: lm[i].x * canvas.width, y: lm[i].y * canvas.height });
   const Q = p => ({ x: p.x * canvas.width, y: p.y * canvas.height });
   ctx.lineWidth = 4; ctx.strokeStyle = "rgba(79,195,247,.85)"; ctx.lineCap = "round";
-  for (const [a, b] of EDGES) { const p = P(a), q = P(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+  for (const [a, b] of EDGES) { if ((lm[a].visibility ?? 1) < 0.3 || (lm[b].visibility ?? 1) < 0.3) continue; const p = P(a), q = P(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
   const [a, b, c] = tri.map(Q);
   ctx.lineWidth = 7; ctx.strokeStyle = (phase === "low" && !EX.holdSec) || phase === "peak" ? "#3ddc84" : phase === "return" ? "#4fc3f7" : "#ffb020";
   ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
@@ -1031,6 +1050,8 @@ function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
 function features(lm, side, wl) {
   const S = side === "R" ? lm[LM.RS] : lm[LM.LS], H = side === "R" ? lm[LM.RH] : lm[LM.LH];
   const f = { hip: { x: H.x, y: H.y }, torso: dist(S, H) || 1 };
+  { const K = side === "R" ? lm[LM.RK] : lm[LM.LK]; if ((K.visibility ?? 1) > 0.5) f.thighLen = dist(H, K); }
+  if ((H.visibility ?? 1) > 0.5) hipEma = hipEma ? { x: hipEma.x * 0.75 + H.x * 0.25, y: hipEma.y * 0.75 + H.y * 0.25 } : { x: H.x, y: H.y };
   // 상체 기울기(도): 3D 월드 좌표에서 골반 중심→어깨 중심 벡터가 수직에서 얼마나 기울었나. +면 뒤로 눕힘, −면 앞으로 숙임
   if (wl) {
     const sm = { y: (wl[LM.LS].y + wl[LM.RS].y) / 2, z: (wl[LM.LS].z + wl[LM.RS].z) / 2 };
@@ -1107,6 +1128,7 @@ function neededJoints() {
   const base = J.custom ? [LM.LH, LM.RH, LM.LK, LM.RK] : [...J.L, ...J.R];
   if (EX.checks.includes("arch") || EX.checks.includes("feet")) base.push(LM.LA, LM.RA);
   if (EX.checks.includes("lean") || EX.checks.includes("hip")) base.push(LM.LS, LM.RS);
+  if (EX.id === "legpress" && MACHINES[machineId]) return [...new Set(base)].filter(j => j !== LM.LA && j !== LM.RA); // 발목은 레일 제약으로 계산
   return [...new Set(base)];
 }
 const NAME = { 11:"왼어깨",12:"오른어깨",13:"왼팔꿈치",14:"오른팔꿈치",15:"왼손목",16:"오른손목",23:"왼골반",24:"오른골반",25:"왼무릎",26:"오른무릎",27:"왼발목",28:"오른발목" };
@@ -1116,7 +1138,7 @@ function runCalib(lm, t) {
   const J = JOINT[EX.joint];
   // 한쪽만 보여도 되는 종목(측면)은 왼/오른 중 더 잘 보이는 쪽 기준
   const sideOK = J.custom ? need.every(i => lm[i].visibility > 0.5)
-    : (J.L.every(i => lm[i].visibility > 0.5) || J.R.every(i => lm[i].visibility > 0.5));
+    : (J.L.filter(i => need.includes(i)).every(i => lm[i].visibility > 0.5) || J.R.filter(i => need.includes(i)).every(i => lm[i].visibility > 0.5)); // 기계 등록 레그프레스는 발목 제외
   const missing = need.filter(i => lm[i].visibility <= 0.5).map(i => NAME[i]);
   if (sideOK) {
     calib.stable += 1;
@@ -1135,8 +1157,56 @@ function runCalib(lm, t) {
 function resetCalib() { calib = { done: false, start: 0, stable: 0, body: calib ? calib.body : null }; }
 async function rebuildLandmarker(delegate) {
   try { landmarker?.close?.(); } catch {}
+  if (modelKind === "movenet") { landmarker = await createMoveNet(delegate === "CPU" ? "cpu" : "webgl"); toast("인식 엔진: MoveNet " + (delegate === "CPU" ? "CPU" : "GPU")); return; }
+  if (!visionFiles) visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts(delegate));
   toast("인식 엔진 전환: " + delegate);
+}
+// ── 기계 제약 (레그프레스) ──────────────────────────────────────────────
+// 직선 썰매: 엉덩이는 의자에 고정, 발은 레일과 평행한 선 위만 움직임 (11/6 엔진 검증).
+// 발목이 화면 밖이거나 정강이 길이와 안 맞으면 → 무릎에서 정강이 길이만큼 떨어진 발판선 위 점으로 대체.
+// footLineOverThigh: 발판선~엉덩이 거리 ÷ 허벅지 길이 (현아 님 영상 실측 17.5cm ÷ 37.5cm). 발목이 보이면 영상에서 다시 잼.
+const MACHINES = { arsenal_linear: { name: "Arsenal Reloaded Linear", railDeg: 35, footLineOverThigh: 0.467 } };
+let machineId = (() => { try { return localStorage.getItem("formcoach.machine") || ""; } catch { return ""; } })();
+var rail = null;
+function resetRail() { rail = { hips: [], thighs: [], shanks: [], offs: [], filled: 0, total: 0 }; }
+resetRail();
+const pmed = a => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+function railTri(lm, side) {
+  const M = MACHINES[machineId]; if (!M || EX.id !== "legpress") return null;
+  const W = video.videoWidth || 1, H = video.videoHeight || 1;
+  const [ih, ik, ia] = side === "R" ? [24, 26, 28] : [23, 25, 27];
+  const px = p => ({ x: p.x * W, y: p.y * H, v: p.visibility ?? 1 });
+  const h = px(lm[ih]), k = px(lm[ik]), a = px(lm[ia]);
+  if (h.v < CONF_TH || k.v < CONF_TH) return null;
+  const d = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
+  if (rail.hips.length < 45) rail.hips.push({ x: h.x, y: h.y });            // 세트 초반 엉덩이 위치 = 의자 기준점
+  const H0 = { x: pmed(rail.hips.map(p => p.x)), y: pmed(rail.hips.map(p => p.y)) };
+  if (rail.thighs.length < 90) rail.thighs.push(d(h, k));
+  const Lt = pmed(rail.thighs);
+  const ankleOk = a.v >= CONF_TH;
+  const dir = Math.sign((ankleOk ? a.x : k.x) - H0.x) || 1;                 // 발판이 있는 쪽
+  const th = M.railDeg * Math.PI / 180;
+  const u = { x: dir * Math.cos(th), y: -Math.sin(th) };                     // 발판이 멀어지는 방향 (화면 y 아래)
+  const n = { x: -dir * Math.sin(th), y: -Math.cos(th) };                    // 발판 면을 따라 위쪽
+  if (ankleOk) {
+    const sl = d(k, a);
+    if (rail.shanks.length < 90 && Math.abs(sl / Lt - 1) < 0.25) rail.shanks.push(sl);
+    if (rail.offs.length < 90) rail.offs.push((a.x - H0.x) * n.x + (a.y - H0.y) * n.y);
+  }
+  const Ls = rail.shanks.length >= 10 ? pmed(rail.shanks) : Lt;
+  let c = M.footLineOverThigh * Lt;
+  if (rail.offs.length >= 20) { const m = pmed(rail.offs); if (Math.abs(m - c) < 0.16 * Lt) c = m; }   // 실측이 DB 와 크게 다르면(가장자리 오인식 등) DB 값 유지
+  let A = a; const fill = !ankleOk || Math.abs(d(k, a) / Ls - 1) > 0.2;
+  rail.total++;
+  if (fill) {
+    const P0 = { x: H0.x + c * n.x, y: H0.y + c * n.y }, w = { x: P0.x - k.x, y: P0.y - k.y };
+    const b = 2 * (w.x * u.x + w.y * u.y), cc = w.x * w.x + w.y * w.y - Ls * Ls, disc = b * b - 4 * cc;
+    if (disc < 0) return null;
+    const sv = (-b + Math.sqrt(disc)) / 2; A = { x: P0.x + sv * u.x, y: P0.y + sv * u.y }; rail.filled++;
+  }
+  const hipUse = d(h, H0) < 0.12 * Lt ? H0 : h;                                // 엉덩이가 들리면 실제 위치 (들림 감지는 원래 점으로 따로)
+  return { tri: [{ x: hipUse.x / W, y: hipUse.y / H }, { x: k.x / W, y: k.y / H }, { x: A.x / W, y: A.y / H }], vis: Math.min(h.v, k.v), filled: fill };
 }
 // ── 각도 파이프라인 (실시간 loop 과 정밀 재분석이 공유) ──
 function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (상태 변화 없음)
@@ -1149,6 +1219,8 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
   const visOf = t => (lm[t[0]].visibility + lm[t[1]].visibility + lm[t[2]].visibility) / 3;
   const visL = visOf(J.L), visR = visOf(J.R);
   const side = visL >= visR ? "L" : "R", idx = J[side], tri = [lm[idx[0]], lm[idx[1]], lm[idx[2]]];
+  const r = EX.joint === "knee" ? railTri(lm, side) : null;
+  if (r) return { side, tri: r.tri, vis: Math.max(r.vis, Math.max(visL, visR)), raw: angleAt(r.tri[0], r.tri[1], r.tri[2]), J, railFilled: r.filled };
   return { side, tri, vis: Math.max(visL, visR), raw: angleAt(tri[0], tri[1], tri[2]), J };
 }
 function smoothAngle(raw, J) { // 물리 하한 → 5프레임 median → EMA. win/smooth/lastGood 갱신
@@ -1212,9 +1284,9 @@ function smoothFrames(frames, winN = PREC.medianWin) {
   return out;
 }
 // 3) 실시간 판정 상태 스냅샷/복원 — 재분석이 끝나면 화면 상태는 그대로
-function snapshotState() { return { reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
-function restoreState(s) { reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
-function resetJudgeState() { reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
+function snapshotState() { return { hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
+function restoreState(s) { hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
+function resetJudgeState() { hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
 // 4) 재판정 (순수 함수: 영상 디코딩 없음 — frames = [{ t(ms), lm, wl }]). 기존 features/judge/finishRep 파이프라인 재사용, 2패스
 //    패스1 = learnRange 만 돌려 obsMin/obsMax 확보(자동 학습 기준이 첫 프레임부터 적용), 패스2 = 판정. thresholds() 우선순위는 그대로
 function reanalyzeFrames(frames, opts = {}) {
@@ -1247,6 +1319,7 @@ function reanalyzeFrames(frames, opts = {}) {
 let precLandmarker = null, precTsLast = 0; // precBusy/precCancel 은 상단 선언 (discardRecording 이 초기화 중 참조)
 async function getPrecLandmarker(force) { // force: "CPU" 로 재생성 (GPU 인스턴스가 detect 에서 계속 실패할 때, 리뷰 #4)
   if (precLandmarker && !force) return precLandmarker;
+  if (!visionFiles) visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
   if (precLandmarker) { try { precLandmarker.close?.(); } catch {} precLandmarker = null; precTsLast = 0; }
   precProgress(force ? "정밀 엔진을 CPU 로 전환 중…" : "정밀 모델 받는 중 (약 30MB, 한 번만)", 0);
   const o = d => ({ baseOptions: { modelAssetPath: PREC.modelUrl, delegate: d }, runningMode: "VIDEO", numPoses: 1, minPoseDetectionConfidence: 0.3, minPosePresenceConfidence: 0.3, minTrackingConfidence: 0.3 });
@@ -1504,18 +1577,78 @@ $("faceFront").onclick = () => setFacing("user");
 paintFacing();
 
 let visionFiles = null;
+// 실시간 인식 모델: lite 는 빠르지만 관절 정확도가 낮음 → 기본을 full 로. 설정에서 변경 (formcoach.model)
+let modelKind = (() => { try { return localStorage.getItem("formcoach.model") || "movenet"; } catch { return "movenet"; } })();
+// ── MoveNet Thunder (Google, Apache-2.0) 어댑터 ─────────────────────────────
+// MediaPipe 와 같은 모양(landmarks[0] = 33점, x·y 정규화, visibility)으로 돌려줘서 나머지 코드는 그대로 동작.
+// MoveNet 점수는 MediaPipe visibility 보다 낮게 나옴 → 권장 임계 0.3 이 앱 임계 0.6(CONF_TH)에 오도록 ×2 환산.
+const MN = {
+  tfUrl: "https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js",
+  modelUrl: "https://cdn.jsdelivr.net/npm/@vladmandic/human-models@3.0.4/models/movenet-thunder.json",
+};
+const COCO2MP = [0, 2, 5, 7, 8, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+function loadScript(src) {
+  return new Promise((res, rej) => { if (window.tf) return res(); const el = document.createElement("script"); el.src = src; el.onload = res; el.onerror = () => rej(new Error("TensorFlow.js 로딩 실패")); document.head.appendChild(el); });
+}
+async function createMoveNet(backend = "webgl") {
+  await loadScript(MN.tfUrl);
+  try { await tf.setBackend(backend); } catch { await tf.setBackend("cpu"); }
+  await tf.ready();
+  const model = await tf.loadGraphModel(MN.modelUrl);
+  tf.tidy(() => model.execute(tf.zeros([1, 256, 256, 3], "int32")));      // 첫 실행 지연 미리 처리
+  let box = null;
+  return {
+    kind: "movenet",
+    detectForVideo(src) {
+      const W = src.videoWidth || src.width, H = src.videoHeight || src.height;
+      if (!W || !H) return { landmarks: [] };
+      if (!box) { const m = Math.max(W, H); box = { cx: W / 2, cy: H / 2, s: m }; }
+      const out = tf.tidy(() => {
+        const img = tf.browser.fromPixels(src).toFloat().expandDims(0);
+        const b = [(box.cy - box.s / 2) / H, (box.cx - box.s / 2) / W, (box.cy + box.s / 2) / H, (box.cx + box.s / 2) / W];
+        return model.execute(tf.image.cropAndResize(img, [b], [0], [256, 256], "bilinear").toInt()).arraySync()[0][0];
+      });
+      const kp = out.map(([y, x, sc]) => [box.cx - box.s / 2 + x * box.s, box.cy - box.s / 2 + y * box.s, sc]);
+      const good = kp.filter(p => p[2] > 0.3);
+      if (good.length >= 5) {   // 다음 프레임 크롭: 보이는 관절 범위 × 1.6 (사람을 따라감)
+        const xs = good.map(p => p[0]), ys = good.map(p => p[1]);
+        const sz = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 1.6;
+        box = { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cy: (Math.min(...ys) + Math.max(...ys)) / 2, s: Math.max(sz, 0.25 * Math.max(W, H)) };
+      } else { box = null; return { landmarks: [] }; }
+      const lm = Array.from({ length: 33 }, () => ({ x: 0.5, y: 0.5, z: 0, visibility: 0 }));
+      kp.forEach((p, i) => {
+        const inside = p[0] > 0.02 * W && p[0] < 0.98 * W && p[1] > 0.02 * H && p[1] < 0.98 * H;   // 화면 가장자리에 찍힌 점은 '안 보임'
+        lm[COCO2MP[i]] = { x: p[0] / W, y: p[1] / H, z: 0, visibility: inside ? Math.min(1, p[2] * 2) : 0 };
+      });
+      return { landmarks: [lm], worldLandmarks: null };
+    },
+    close() { try { model.dispose(); } catch {} },
+  };
+}
+const modelUrl = k => `https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_${k}/float16/1/pose_landmarker_${k}.task`;
 const modelOpts = delegate => ({
-  baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate },
+  baseOptions: { modelAssetPath: modelUrl(modelKind), delegate },
   runningMode: "VIDEO", numPoses: 1,
   minPoseDetectionConfidence: 0.3, minPosePresenceConfidence: 0.3, minTrackingConfidence: 0.3,
 });
 async function init() {
   try {
-    visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-    try { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("GPU")); } catch { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("CPU")); }
+    if (modelKind === "movenet") {
+      statusEl.textContent = "인식 모델(MoveNet) 받는 중…";
+      try { landmarker = await createMoveNet("webgl"); } catch (e) { try { landmarker = await createMoveNet("cpu"); } catch { modelKind = "full"; toast("MoveNet 로딩 실패 → MediaPipe 로 전환"); } }
+    }
+    if (modelKind !== "movenet") {
+      visionFiles = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+      try { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("GPU")); } catch { landmarker = await PoseLandmarker.createFromOptions(visionFiles, modelOpts("CPU")); }
+    }
     statusEl.textContent = "종목을 고르고 시작을 누르세요.";
     startBtn.disabled = false; startBtn.textContent = "시작"; $("scanBtn0").disabled = false;
-    paintProfile(); paintSrc();
+    paintProfile(); paintSrc(); paintMachine();
+    $("modelSel").value = modelKind;
+    $("modelSel").onchange = async e => {
+      modelKind = e.target.value; try { localStorage.setItem("formcoach.model", modelKind); } catch {}
+      toast("인식 모델 바꾸는 중…"); try { await rebuildLandmarker("GPU"); } catch { try { await rebuildLandmarker("CPU"); } catch { toast("모델 전환 실패"); } }
+    };
     await listCams();
   } catch (e) { statusEl.textContent = "모델 로딩 실패: 인터넷 연결을 확인하세요. (" + e.message + ")"; }
 }
