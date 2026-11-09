@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>폼코치</title>
-<!-- APP_VER: 11.07-7 -->
+<!-- APP_VER: 11.09-5 -->
 <style>
   :root {
     --bg: #0f1216; --panel: #171c22; --line: #2a323c; --fg: #e8edf2; --muted: #8a97a6;
@@ -210,7 +210,7 @@
     <button class="ghost" id="resetBtn">카운트 초기화</button>
     <button class="ghost" id="recalBtn">사람 다시 인식 (기준 재학습)</button>
     <label class="field"><span>인식 모델 <b id="modelVal"></b></span>
-      <select id="modelSel"><option value="movenet">MoveNet (기본 · 기계 운동에 강함)</option><option value="lite">MediaPipe 빠름 (lite) — 오래된 폰</option><option value="full">MediaPipe 정확 (full) — 상체 기울기(아웃타이) 필요할 때</option><option value="heavy">MediaPipe 최고 (heavy) — PC·최신 폰</option></select></label>
+      <select id="modelSel"><option value="auto">자동 (기본) — 기구 다리 운동은 MoveNet, 나머지는 MediaPipe 33점</option><option value="movenet">MoveNet — 기계에 가려진 다리에 강함 (17점)</option><option value="lite">MediaPipe 빠름 (lite) — 오래된 폰</option><option value="full">MediaPipe 정확 (full) — 상체 기울기(아웃타이) 필요할 때</option><option value="heavy">MediaPipe 최고 (heavy) — PC·최신 폰</option></select></label>
     <button class="ghost" id="cpuBtn">인식이 안 될 때: 엔진 CPU 모드로 전환</button>
     <div style="font-size:12px;color:var(--muted);line-height:1.5">FPS <b id="fps">0</b> · 추적 <b id="side">-</b> · 신뢰도 <b id="conf">-</b> · 상체 <b id="leanDbg">-</b><br>영상은 기기 안에서만 처리되며 저장·전송되지 않습니다.</div>
   </div>
@@ -326,7 +326,7 @@ const MIN_REP_MS = 600, CONF_TH = 0.6;
 var neckStand = null; // backRound 기준: 선 자세의 귀-어깨-엉덩이 각
 let reps = 0, setNo = 1, phase = null, repList = [], cur = null, hipAnchor = null, torsoLen = 1;
 var hipEma = null; // 엉덩이 위치 지수평활 (0.25) — 들림 판정용
-var lastOutWarn = 0, kickFacing = 1;
+var lastOutWarn = 0, kickFacing = 1, learnBuf = [];
 // 손 관절(트라이셉 전용): MediaPipe Hand Landmarker (Apache-2.0). 2프레임에 한 번, 추적 중인 손목에 가장 가까운 손
 var handLm = null, handLoading = false, handPts = null, handT = 0, handTick = 0, wristEma = null;
 async function loadHand() {
@@ -358,7 +358,7 @@ function heelRel(f, angle) {
 }
 // 정밀 분석(오프라인 재판정)용: 판정 함수들은 performance.now() 대신 clock() 을 쓰고, quiet 면 음성/힌트/DOM 갱신을 건너뜀
 let clock = () => performance.now(), quiet = false;
-const APP_VER = "11.07-7"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
+const APP_VER = "11.09-5"; // 화면에 표시 — 캐시/배포 지연 확인용. 파일 바꿀 때마다 올릴 것
 $("appVer").textContent = "v" + APP_VER; $("appVer2").textContent = "v" + APP_VER;
 const PREC = { fps: 24, maxSec: 120, medianWin: 5, modelUrl: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task" };
 let recOn = true; try { recOn = localStorage.getItem("formcoach.rec") !== "0"; } catch {}
@@ -382,6 +382,7 @@ let toastT; function toast(msg) { if (quiet) return; const t = $("toast"); t.tex
 for (const sel of [exSel, exSel0]) EXERCISES.forEach(e => { const o = document.createElement("option"); o.value = e.id; o.textContent = e.name; sel.append(o); });
 function applyExercise(id) {
   EX = EXERCISES.find(e => e.id === id) || EXERCISES[0];
+  if (typeof ensureModel === "function") ensureModel();
   exSel.value = EX.id; exSel0.value = EX.id;
   downTh.value = EX.low; upTh.value = EX.high; downVal.textContent = EX.low + "°"; upVal.textContent = EX.high + "°";
   $("angleLabel").textContent = JOINT[EX.joint].label; $("exName").textContent = EX.name;
@@ -407,7 +408,7 @@ applyExercise("legpress");
 downTh.oninput = () => downVal.textContent = downTh.value + "°";
 upTh.oninput = () => upVal.textContent = upTh.value + "°";
 $("holdTh").oninput = () => $("holdVal").textContent = $("holdTh").value + "초";
-function resetSet() { wristEma = null; handPts = null; sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
+function resetSet() { holdInfo = null; resumeInfo = null; angVel = 0; prevMed = null; resyncSnap = null; jumpSince = 0; preJump = null; resyncT = -1e9; angleHeld = false; wristEma = null; handPts = null; sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); discardRecording(); neckStand = null; reps = 0; repsEl.textContent = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; EX.checks.forEach(c => setChk(c, "")); if (typeof resetAuto === "function") resetAuto(); if (typeof resetCalib === "function") resetCalib(); }
 $("resetBtn").onclick = () => { resetSet(); closeSheets(); toast("초기화했어요"); };
 $("recalBtn").onclick = () => { resetAuto(); resetCalib(); phase = null; cur = null; closeSheets(); toast("카메라 앞에 서 주세요"); };
 $("cpuBtn").onclick = async () => { closeSheets(); hint("엔진 전환 중...", "info"); try { await rebuildLandmarker("CPU"); } catch { toast("전환 실패"); } };
@@ -468,28 +469,41 @@ function hint(text, cls) { if (quiet) return; cueEl.textContent = text; cueEl.cl
 function setChk(name, state) { if (quiet) return; const el = $("chk-" + name); if (el) el.className = "chk" + (state === "on" ? " on" : state === "ok" ? " ok" : ""); }
 
 // ───────── 기하 ─────────
+// 화면 비율 보정: 관절점 좌표는 가로·세로를 각각 0~1 로 나눈 값이라, 세로 영상(9:16)에서는 가로 1 칸이 세로 1 칸의 0.56배 길이.
+// 그대로 각도를 재면 최대 30° 가까이 틀어짐 (11/9 숄더 프레스 영상 실측: 159° → 148°). AX = 가로/세로 비율을 x 에 곱해 실제 길이로 계산
+var AX = 1;
+function setAspect(w, h) { if (w > 0 && h > 0) AX = w / h; }
 function angleAt(a, b, c) {
-  const v1 = { x: a.x - b.x, y: a.y - b.y }, v2 = { x: c.x - b.x, y: c.y - b.y };
+  const v1 = { x: (a.x - b.x) * AX, y: a.y - b.y }, v2 = { x: (c.x - b.x) * AX, y: c.y - b.y };
   const dot = v1.x * v2.x + v1.y * v2.y; const m = Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y) || 1e-6;
   return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
 }
-const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const dist = (a, b) => Math.hypot((a.x - b.x) * AX, a.y - b.y);
 function angle3D(a, b, c) { // b에서의 3D 각도 (z가 없으면 2D와 동일)
   const v1 = { x: a.x - b.x, y: a.y - b.y, z: (a.z ?? 0) - (b.z ?? 0) }, v2 = { x: c.x - b.x, y: c.y - b.y, z: (c.z ?? 0) - (b.z ?? 0) };
   const dot = v1.x * v2.x + v1.y * v2.y + v1.z * v2.z, m = Math.hypot(v1.x, v1.y, v1.z) * Math.hypot(v2.x, v2.y, v2.z) || 1e-6;
   return Math.acos(Math.max(-1, Math.min(1, dot / m))) * 180 / Math.PI;
 }
 // 두 점을 잇는 선이 수평에서 얼마나 기울었나 (-90~90°, 좌우 반전·카메라 방향과 무관)
-function tiltDeg(a, b) { let d = Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI; if (d > 90) d -= 180; if (d < -90) d += 180; return d; }
+function tiltDeg(a, b) { let d = Math.atan2(b.y - a.y, (b.x - a.x) * AX) * 180 / Math.PI; if (d > 90) d -= 180; if (d < -90) d += 180; return d; }
 function median(v) { win.push(v); if (win.length > 5) win.shift(); const s = [...win].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; }
 
 // ───────── 반복 판정 ─────────
 function newRep(now, angle, conf) { return { tStart: now, tBottom: now, tEnd: 0, min: angle, max: angle, confSum: conf, confN: 1, hipMove: 0, symDiff: 0, valgus: 0, prevAngle: angle, prevT: now, holdMs: 0, leanSum: 0, leanN: 0 }; }
 // ═══════════ 내 몸 프로필 (폰 안에만 저장) ═══════════
 var profile = null;
-function loadProfile() { try { profile = JSON.parse(localStorage.getItem("formcoach.profile") || "null"); } catch { profile = null; } }
-function saveProfile() { try { localStorage.setItem("formcoach.profile", JSON.stringify(profile)); } catch {} }
+// 11.09-5: 화면 비율 보정 전에 잰 프로필(체형 스캔·기준선·가동범위)은 틀어진 각도라 섞으면 기준이 어긋남
+// → 처음 열 때 옛 프로필을 formcoach.profile.v1 로 옮겨 두고 다시 스캔 안내. 새로 저장하는 프로필에는 aspectFix 표시
+var oldProfileMoved = false;
+function loadProfile() {
+  try {
+    profile = JSON.parse(localStorage.getItem("formcoach.profile") || "null");
+    if (profile && !profile.aspectFix) { localStorage.setItem("formcoach.profile.v1", JSON.stringify(profile)); localStorage.removeItem("formcoach.profile"); profile = null; oldProfileMoved = true; }
+  } catch { profile = null; }
+}
+function saveProfile() { try { if (profile) profile.aspectFix = 1; localStorage.setItem("formcoach.profile", JSON.stringify(profile)); } catch {} }
 loadProfile();
+if (oldProfileMoved) setTimeout(() => toast("앱 각도 계산이 정확해져서 예전 프로필은 백업했어요. 프로필 스캔을 다시 해 주세요."), 1500);
 function paintProfile() {
   const has = !!(profile && profile.date);
   $("profileBadge").textContent = has ? `프로필 있음 · ${new Date(profile.date).toLocaleDateString("ko-KR")} 스캔` : "프로필 없음 · 스캔하면 내 몸에 맞춘 기준으로 판정해요";
@@ -589,7 +603,7 @@ function runScan(lm, wl, t) {
     return;
   }
   // 가동범위 단계: 앞뒤 움직임은 2D에서 왜곡되므로 3D(월드) 좌표로 각도 계산. 값을 모아 단계 끝에 튄 값 제외(하위/상위 5%)
-  const P = wl || lm; // 3D 좌표가 있으면 그걸로
+  const P = wl || lm.map(p => ({ x: p.x * AX, y: p.y, z: 0 })); // 3D 좌표가 있으면 그걸로 (없으면 화면 비율 보정한 2D)
   const ang3 = (i, j, k) => angle3D(P[i], P[j], P[k]);
   const push = (k, v, minPhys, maxPhys) => { if (v < minPhys || v > maxPhys) return; (a[k] = a[k] || []).push(v); };
   const robust = (arr, q) => { if (!arr || arr.length < 8) return null; const s = [...arr].sort((x, y) => x - y); return s[Math.floor((s.length - 1) * q)]; };
@@ -637,15 +651,33 @@ function finishScan() {
 }
 
 // ═══════════ 판정 기준 우선순위: 종목 기준선 → 내 가동범위 → 자동 학습 → 수동 ═══════════
-var autoMode = true, obsMin = null, obsMax = null, obsFrames = 0;
+var autoMode = true, obsMin = null, obsMax = null, obsFrames = 0, obsHist = [];
 const AUTO_MIN_RANGE = 12;
+// 범위 학습 (11.09-3): 각도가 꺾이는 점(바닥·꼭대기)을 모아 최근 6개의 중앙값으로 범위를 정함.
+// 예전처럼 전체 최소·최대(또는 3~97%)를 쓰면, 시작 전에 손잡이를 잡느라 팔을 크게 굽혔다 편 동작 한 번이
+// '내 범위'로 학습돼 이후 작은 반복을 못 셌음 (트라이셉 8회 중 1회). 중앙값이면 그런 한 번은 묻힘.
+// 바닥·꼭대기가 각각 3개(약 2~3회 반복) 모이면 준비 완료 → 그동안 모아 둔 프레임을 다시 판정해 첫 반복도 셈.
+var tpMin = [], tpMax = [], tpDir = 0, tpCand = null, tpForce = false; // tpForce: 세트가 1~2회로 끝나 3개가 안 모였을 때 있는 것만으로 판정
+const TP_PROM = 10, TP_NEED = 3;
+const tpMed = a => { const b = a.slice(-6).sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
 function learnRange(angle) {
-  if (obsMin == null) { obsMin = obsMax = angle; obsFrames = 0; return; }
+  if (typeof angleHeld !== "undefined" && angleHeld) return; // 튄 값 유지 중인 프레임은 학습 안 함
+  if (obsMin == null) { obsMin = obsMax = angle; obsFrames = 0; obsHist = [angle]; tpCand = angle; tpDir = 0; return; }
   obsFrames++;
-  if (angle < obsMin) obsMin = angle; // 세트 안에서는 극값만 갱신 (드리프트 없음 → 피로 감지 유지)
-  if (angle > obsMax) obsMax = angle;
+  obsHist.push(angle); if (obsHist.length > 1800) obsHist.shift();
+  // 꺾이는 점 찾기: 후보에서 반대 방향으로 TP_PROM 이상 돌아오면 후보를 바닥/꼭대기로 확정
+  if (tpDir === 0) { // 첫 방향 정하기: 지금까지 최댓값에서 내려왔으면 그게 꼭대기, 최솟값에서 올라왔으면 그게 바닥
+    const hi = Math.max(obsMax, angle), lo = Math.min(obsMin, angle);
+    if (hi - angle >= TP_PROM) { tpMax.push(hi); tpDir = -1; tpCand = angle; }
+    else if (angle - lo >= TP_PROM) { tpMin.push(lo); tpDir = 1; tpCand = angle; }
+  } else if (tpDir === 1) { if (angle > tpCand) tpCand = angle; else if (tpCand - angle >= TP_PROM) { tpMax.push(tpCand); tpDir = -1; tpCand = angle; } }
+  else { if (angle < tpCand) tpCand = angle; else if (angle - tpCand >= TP_PROM) { tpMin.push(tpCand); tpDir = 1; tpCand = angle; } }
+  if (tpMin.length > 12) tpMin.shift(); if (tpMax.length > 12) tpMax.shift();
+  const need = tpForce ? 1 : TP_NEED;
+  if (tpMin.length >= need && tpMax.length >= need) { obsMin = tpMed(tpMin); obsMax = tpMed(tpMax); }
+  else { if (angle < obsMin) obsMin = angle; if (angle > obsMax) obsMax = angle; } // 준비 전: 화면 표시용 극값
 }
-const autoReady = () => autoMode && obsMin != null && (obsMax - obsMin) >= AUTO_MIN_RANGE && obsFrames > 20;
+const autoReady = () => { const need = tpForce ? 1 : TP_NEED; return autoMode && obsMin != null && tpMin.length >= need && tpMax.length >= need && (obsMax - obsMin) >= AUTO_MIN_RANGE; };
 var thOverride = null; // 정밀 재분석 중: 녹화 종료 시점의 판정 기준 스냅샷 (리뷰 #3 — 리포트 직후 기준선 자동저장으로 기준이 바뀌는 문제)
 function thresholds() {
   if (thOverride) return thOverride;
@@ -662,11 +694,11 @@ function thresholds() {
     const r = mx - mn; return { low: mn + r * (ROM_LOW[EX.id] ?? 0.2), high: mn + r * (ROM_HIGH[EX.id] ?? 0.85), src: "내 가동범위" };
   }
   if (autoReady()) return { low: obsMin + (obsMax - obsMin) * 0.25, high: obsMin + (obsMax - obsMin) * 0.75, src: "자동 학습" };
-  return { low: +downTh.value, high: +upTh.value, src: autoMode && obsMin == null ? "학습 대기" : "수동" };
+  return { low: +downTh.value, high: +upTh.value, src: autoMode ? "학습 대기" : "수동" }; // 자동 모드에서 범위가 아직 안 잡혔으면 판정하지 않고 프레임을 모아 둠 (기본 기준으로 첫 반복을 놓치지 않게)
 }
 const getLow = () => thresholds().low, getHigh = () => thresholds().high;
 function paintSrc() { const t = thresholds(); $("thSrc").textContent = `현재 판정 기준: ${t.src} (${t.low.toFixed(0)}° / ${t.high.toFixed(0)}°)`; }
-function resetAuto() { obsMin = obsMax = null; obsFrames = 0; }
+function resetAuto() { obsMin = obsMax = null; obsFrames = 0; obsHist = []; learnBuf = []; tpMin = []; tpMax = []; tpDir = 0; tpCand = null; tpForce = false; }
 function saveBaseline(auto, list = repList) { // list: 정밀 탭에서는 precReport.repList
   if (!list.length) return;
   const good = list.filter(r => r.score >= 80), use = good.length >= 2 ? good : list;
@@ -686,7 +718,7 @@ $("profCopy").onclick = async () => {
 };
 $("profPaste").onclick = () => { $("profBox").hidden = false; $("profBox").value = ""; $("profBox").placeholder = "복사해 둔 프로필을 여기에 붙여넣고 '복원 실행'"; $("profRestore").hidden = false; $("profBox").focus(); };
 $("profRestore").onclick = () => {
-  try { const p = JSON.parse($("profBox").value); if (!p || !p.date) throw 0; profile = p; saveProfile(); paintProfile(); paintSrc(); $("profBox").hidden = true; $("profRestore").hidden = true; toast("프로필을 복원했어요"); }
+  try { const p = JSON.parse($("profBox").value); if (!p || !p.date) throw 0; if (!p.aspectFix) { toast("예전 버전(각도 보정 전)에서 만든 프로필이라 복원할 수 없어요. 다시 스캔해 주세요."); return; } profile = p; saveProfile(); paintProfile(); paintSrc(); $("profBox").hidden = true; $("profRestore").hidden = true; toast("프로필을 복원했어요"); }
   catch { toast("형식이 맞지 않아요. 복사한 내용 전체를 붙여넣어 주세요"); }
 };
 $("autoSw").onclick = e => { autoMode = !autoMode; e.target.classList.toggle("on", autoMode); downTh.disabled = upTh.disabled = autoMode; resetAuto(); toast(autoMode ? "자동 기준: 1~2회 움직이면 맞춰져요" : "수동 기준 사용"); };
@@ -788,6 +820,40 @@ function profileRom() {
   return null;
 }
 
+// 실시간 판정 입구: 기준이 아직 없으면 프레임을 모아 두고, 기준이 잡히는 순간 모아 둔 프레임을 조용히 다시 판정 (첫 1회 누락 방지)
+function liveJudge(a, vis, f) {
+  const th = thresholds();
+  if (th.src === "학습 대기" || (th.src === "자동 학습" && !autoReady())) { learnBuf.push({ a, vis, f, t: clock() }); if (learnBuf.length > 900) learnBuf.shift(); return false; }
+  replayLearnBuf();
+  judge(a, vis, f); pruneReps(); return true;
+}
+function replayLearnBuf() {
+  if (!learnBuf.length) return;
+  const buf = learnBuf, rc = clock, q = quiet; learnBuf = []; let ft = 0; quiet = true; clock = () => ft;
+  try { for (const b of buf) { ft = b.t; judge(b.a, b.vis, b.f); } } finally { clock = rc; quiet = q; }
+  if (!quiet) repsEl.textContent = reps;
+}
+// 세트 종료 때 범위가 아직 덜 잡혔으면(1~2회 세트) 모인 바닥·꼭대기만으로 기준을 정하고 모아 둔 프레임을 판정
+function flushLearn() {
+  if (!autoMode || !learnBuf.length || autoReady() || !tpMin.length || !tpMax.length) return;
+  tpForce = true; obsMin = tpMed(tpMin); obsMax = tpMed(tpMax);
+  if (autoReady()) { replayLearnBuf(); pruneReps(); }
+}
+// '가동범위 줄어듦' 비교 기준: 처음 3회(아직 3회가 안 됐으면 지금 반복 포함)의 중앙값. 예전엔 처음 2회 평균이라 첫 반복 하나가 튀면 이후 전 반복이 표시됨
+function fatBase(k, r) { const v = repList.slice(0, 3).map(x => x[k]); if (v.length < 3) v.push(r[k]); v.sort((a, b) => a - b); return v.length === 3 ? v[1] : (v[0] + v[1]) / 2; }
+// 반복으로 인정할 최소 움직임: 학습 범위의 35% (최소 15°) — 이보다 작으면 흔들림
+const minTravel = () => Math.max(15, obsMin != null ? (obsMax - obsMin) * 0.35 : 15);
+// 처음 범위를 배우는 동안(범위가 작을 때) 센 반복 중, 나중에 드러난 실제 범위의 35%도 안 움직인 건 고쳐 잡기였던 것 → 취소
+function pruneReps() {
+  if (obsMin == null || !repList.length) return;
+  const rng = obsMax - obsMin;
+  // 학습 중 센 반복만 다시 봄 (범위가 안정된 뒤 센 반복은 건드리지 않음):
+  //  ① 실제 범위의 35%도 안 움직임 = 고쳐 잡기 ② 첫 반복이 범위를 50% 넘게 벗어남 = 손잡이 잡기·기구 세팅 같은 준비 동작
+  const keep = repList.filter((r, i) => !r.early || r.shallow || r.unseen || (r.max - r.min >= rng * 0.35 && !(i === 0 && (r.min < obsMin - rng * 0.5 || r.max > obsMax + rng * 0.5)))); // 얕은 반복·가림 추론 반복은 이미 따로 검증됨
+  if (keep.length === repList.length) return;
+  keep.forEach((r, i) => r.n = i + 1); repList = keep; reps = keep.length; if (!quiet) repsEl.textContent = reps;
+}
+
 // ── 정점 버티기형 (아웃타이, 힙쓰러스트): 시작(low) → 정점(high)에서 버팀 → 천천히 복귀(low) = 1회 ──
 function judgePeak(angle, conf, f) {
   const low = getLow(), high = getHigh(), now = clock();
@@ -811,6 +877,10 @@ function judgePeak(angle, conf, f) {
 
   if (phase === "low") {
     if (angle >= high) { phase = "peak"; r.tPeak = now; r.holdMs = 0; r.kneeAtPeak = f.knee; speak("버티세요", "good"); }
+    else if (r.max < high && r.max - r.min >= minTravel() && r.max - angle >= minTravel() * 0.7 && angle <= low + 5 && now - r.tStart >= MIN_REP_MS) {
+      if (now - lastSpeak > 2000) speak(EX.cueHigh, "warn"); // 덜 찬 반복: 고쳐 잡기와 구분이 안 돼 세지 않고 경고만
+      cur = null;
+    }
     else if (angle > low + 10 && now - r.tStart > 2500 && now - lastSpeak > 2500) speak(EX.cueHigh, "warn");
   } else if (phase === "peak") {
     if (angle >= high - 6) {
@@ -819,13 +889,15 @@ function judgePeak(angle, conf, f) {
       if (f.knee != null) r.kneeAtPeak = f.knee;
       const s = r.holdMs / 1000;
       hint(s >= holdSec ? "좋아요, 천천히 돌아오세요" : `버티기 ${s.toFixed(1)} / ${holdSec}초`, s >= holdSec ? "good" : "info");
-    } else if (angle < high - 12) { phase = "return"; r.tReturn = now; }
+    } else if (angle < high - Math.max(12, (high - low) * 0.3)) { phase = "return"; r.tReturn = now; r.retMin = angle; }
   } else if (phase === "return") {
+    r.retMin = Math.min(r.retMin ?? angle, angle);
     if (angle <= low) {
       r.tEnd = now; const dur = r.tEnd - r.tStart;
       phase = "low";
       if (dur < MIN_REP_MS) { hint("너무 빨라요", "warn"); cur = null; return; }
       finishPeakRep(r, low, high, holdSec); cur = null;
+    } else if (angle >= high && r.max - r.retMin < minTravel()) { phase = "peak"; // 덜 돌아왔다 다시 올라감 = 정점 흔들림 → 같은 반복
     } else if (angle >= high) { // 다 안 모으고 다시 벌림 → 불완전 반복으로 마감
       r.tEnd = now; r.incomplete = true; finishPeakRep(r, low, high, holdSec); cur = null; phase = "peak";
       cur = newRep(now, angle, conf); cur.tPeak = now; cur.holdMs = 0;
@@ -851,12 +923,11 @@ function finishPeakRep(r, low, high, holdSec) {
   if (EX.checks.includes("trunkMove") && r.tkMax != null && r.tkMax - r.tkMin > COMMON_TH.trunkMoveDeg) flags.push("trunkMove");
   let feetMsg = null;
   if (EX.checks.includes("feet") && r.kneeAtPeak != null) { if (r.kneeAtPeak > 110) { flags.push("feet"); feetMsg = "발을 엉덩이 쪽으로 당기세요"; } else if (r.kneeAtPeak < 70) { flags.push("feet"); feetMsg = "발을 조금 앞으로 두세요"; } }
-  const base = repList.slice(0, 2);
-  if (EX.checks.includes("fatigue") && base.length === 2 && (base[0].max + base[1].max) / 2 - r.max > 8) flags.push("fatigue");
+  if (EX.checks.includes("fatigue") && repList.length >= 2 && fatBase("max", r) - r.max > 8) flags.push("fatigue");
   commonFlags(r, flags); // 공통 로직 (torsoSway 등)
   const W = { depth:15, lockout:20, hold:20, lean:20, slowReturn:20, tempo:10, hip:25, arch:30, feet:15, fatigue:10, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25, trunkMove:20 };
   const score = Math.max(0, 100 - flags.reduce((s, f) => s + (W[f] || 10), 0));
-  repList.push({ tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, sway: r.sway ?? null });
+  repList.push({ early: !(tpMin.length >= TP_NEED + 1 && tpMax.length >= TP_NEED + 1), dur: (r.tEnd || clock()) - r.tStart, shallow: !!r.shallow, unseen: !!r.unseen, tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, n: reps, min: r.min, max: r.max, ecc: ret, con: hold, hold, ret, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, sway: r.sway ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
   const PRIO = ["arch","trunkMove","hip","heel","torsoSway","lean","feet","slowReturn","hold","lockout","depth","tempo","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
@@ -870,10 +941,23 @@ function finishPeakRep(r, low, high, holdSec) {
 function judge(angle, conf, f) {
   if (EX.holdSec) return judgePeak(angle, conf, f);
   const low = getLow(), high = getHigh(), now = clock();
+  if (resumeInfo) { const h = resumeInfo; resumeInfo = null;
+    if (now - h.t >= 500) {
+      // 내려가던 중 가려졌다가 다시 보일 때 그 각도 이상이면 → 안 보인 사이 바닥을 찍음
+      if (phase === "high" && cur && h.v < -1 && angle >= h.a - 5 && angle > low) { phase = "low"; cur.min = Math.min(cur.min, low - 1); cur.tBottom = h.t + (now - h.t) / 2; cur.unseen = true; }
+      // 바닥에서 가려졌다가 다시 보일 때 거의 다 밀어 올린 각도면 → 안 보인 사이 1회 완료
+      else if (phase === "low" && cur && angle >= high - 10) { accumulate(cur, high + 1, conf, f, now); cur.tEnd = now; cur.unseen = true; phase = "high"; finishRep(cur, low, high); cur = null; return; }
+    }
+  }
   if (phase === null) { phase = angle > (low + high) / 2 ? "high" : "low"; return; }
   if (phase === "high") {
     if (angle < high - 10 && !cur) { cur = newRep(now, angle, conf); hipAnchor = hipEma ? { ...hipEma } : f.hip; torsoLen = Math.max(f.torso, f.thighLen || 0); }
     if (angle < low) { phase = "low"; speak("좋아요", "good"); setChk("depth", "ok"); }
+    else if (cur && angle > high) { // 기준까지 안 내려가고 돌아옴 → 횟수에 넣지 않음
+      // 얕은 반복인지 자세 고쳐 잡기인지 각도만으로는 확실히 구분할 수 없어서, 세지 않고 경고만 함 (자세를 고칠 때 헛카운트 방지)
+      if ((obsMax ?? high) - cur.min >= minTravel() && now - cur.tStart >= MIN_REP_MS && now - lastSpeak > 2000) speak(EX.cueLow, "warn");
+      cur = null;
+    }
     else if (cur && angle < high - 10 && now - lastSpeak > 2000) hint(EX.cueLow, "warn");
     if (cur) accumulate(cur, angle, conf, f, now);
   } else {
@@ -933,9 +1017,8 @@ function finishRep(r, low, high) {
   if (EX.checks.includes("elbowFix") && r.uaMax != null && r.uaMax - r.uaMin > COMMON_TH.elbowFixDeg) flags.push("elbowFix");
   if (EX.checks.includes("trunkMove") && r.tkMax != null && r.tkMax - r.tkMin > COMMON_TH.trunkMoveDeg) flags.push("trunkMove");
   if (EX.checks.includes("wristBend") && r.wrMax != null && r.wrMax > COMMON_TH.wristBendDeg) flags.push("wristBend");
-  const base = repList.slice(0, 2);
-  if (EX.checks.includes("fatigue") && base.length === 2) {
-    const b = (base[0].min + base[1].min) / 2, bmax = (base[0].max + base[1].max) / 2;
+  if (EX.checks.includes("fatigue") && repList.length >= 2) {
+    const b = fatBase("min", r), bmax = fatBase("max", r);
     if (EX.joint === "thighs" ? bmax - r.max > 8 : r.min - b > 10) flags.push("fatigue");
   }
   const hold = r.holdMs / 1000;
@@ -947,7 +1030,7 @@ function finishRep(r, low, high) {
   }
   commonFlags(r, flags); // 공통 로직 (pelvis / hipRise / torsoSway)
   const score = Math.max(0, 100 - flags.reduce((s, f) => s + ({ depth:30, lockout:20, tempo:15, hip:25, sym:15, valgus:25, fatigue:10, hold:20, lean:20, heel:20, pelvis:25, hipRise:15, torsoSway:15, backRound:25, elbowFix:15, trunkMove:15, wristBend:10 }[f] || 10), 0));
-  repList.push({ uaRange: r.uaMax != null ? r.uaMax - r.uaMin : null, tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, wrMax: r.wrMax ?? null, n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, pelvisDelta: r.pelvisDelta ?? null, sway: r.sway ?? null, backRoundDelta: r.backRoundDelta ?? null });
+  repList.push({ early: !(tpMin.length >= TP_NEED + 1 && tpMax.length >= TP_NEED + 1), dur: (r.tEnd || clock()) - r.tStart, shallow: !!r.shallow, unseen: !!r.unseen, uaRange: r.uaMax != null ? r.uaMax - r.uaMin : null, tkRange: r.tkMax != null ? r.tkMax - r.tkMin : null, wrMax: r.wrMax ?? null, n: reps, min: r.min, max: r.max, ecc, con, hold, lean: leanAvg, flags, score, conf: r.confSum / (r.confN || 1), kneeFwd: r.kneeFwd ?? null, pelvisDelta: r.pelvisDelta ?? null, sway: r.sway ?? null, backRoundDelta: r.backRoundDelta ?? null });
   EX.checks.forEach(c => setChk(c, flags.includes(c) ? "on" : "ok"));
   const PRIO = ["pelvis","backRound","hip","hipRise","valgus","heel","trunkMove","elbowFix","wristBend","torsoSway","lean","hold","tempo","depth","lockout","sym","fatigue"];
   const top = PRIO.find(p => flags.includes(p));
@@ -965,6 +1048,7 @@ function finishRep(r, low, high) {
 $("endSetBtn").onclick = showReport;
 $("nextSetBtn").onclick = () => { setNo++; resetSet(); closeSheets(); toast(`${setNo}세트 시작`); speak(`${setNo}세트`, "info"); };
 function showReport() {
+  flushLearn();
   if (!repList.length) { toast("기록된 반복이 없어요"); return; }
   stopRecording(); // 세트 종료 → 영상 보관 (정밀 분석용)
   repView = precReport ? "prec" : "live";
@@ -1092,7 +1176,12 @@ function drawChart(ys, ref, okFn, title) {
 }
 
 // ───────── 그리기 ─────────
-const EDGES = [[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32],[11,13],[13,15],[12,14],[14,16]];
+// 골격 선 (MediaPipe 33점 전체): 얼굴(눈 안·바깥, 코, 귀, 입) · 어깨~손목 · 손 3점(새끼·검지·엄지) · 골반~발목 · 발 3점(발목·뒤꿈치·발끝)
+// MoveNet(17점)은 손·발·눈 안쪽 점이 없어서(visibility 0) 그 선은 자동으로 안 그려짐
+const EDGES = [[0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],
+  [11,12],[11,23],[12,24],[23,24],[11,13],[13,15],[12,14],[14,16],
+  [15,17],[15,19],[17,19],[15,21],[16,18],[16,20],[18,20],[16,22],
+  [23,25],[25,27],[24,26],[26,28],[27,29],[29,31],[27,31],[28,30],[30,32],[28,32]];
 function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
   canvas.width = video.videoWidth; canvas.height = video.videoHeight;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1100,6 +1189,8 @@ function draw(lm, tri) { // tri: 점 3개 (정규화 좌표)
   const Q = p => ({ x: p.x * canvas.width, y: p.y * canvas.height });
   ctx.lineWidth = 4; ctx.strokeStyle = "rgba(79,195,247,.85)"; ctx.lineCap = "round";
   for (const [a, b] of EDGES) { if ((lm[a].visibility ?? 1) < 0.3 || (lm[b].visibility ?? 1) < 0.3) continue; const p = P(a), q = P(b); ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke(); }
+  ctx.fillStyle = "#2bd4a4"; // 관절 점 (보이는 것만)
+  for (let i = 0; i < lm.length; i++) { if ((lm[i].visibility ?? 1) < 0.3) continue; const p = P(i); ctx.beginPath(); ctx.arc(p.x, p.y, i <= 10 ? 3 : 5, 0, Math.PI * 2); ctx.fill(); }
   const [a, b, c] = tri.map(Q);
   ctx.lineWidth = 7; ctx.strokeStyle = (phase === "low" && !EX.holdSec) || phase === "peak" ? "#3ddc84" : phase === "return" ? "#4fc3f7" : "#ffb020";
   ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
@@ -1124,15 +1215,15 @@ function features(lm, side, wl) {
     if (up > 0.05) f.lean = Math.atan2(back, up) * 180 / Math.PI;
   }
   // 트라이셉: 위팔-몸통 각도(팔꿈치 고정), 몸통 기울기(상체 고정), 손목 꺾임(손 모델)
-  if (EX.id === "kickback" && (H.visibility ?? 1) > 0.5 && (S.visibility ?? 1) > 0.5) f.trunk = Math.atan2(S.x - H.x, H.y - S.y) * 180 / Math.PI;
+  if (EX.id === "kickback" && (H.visibility ?? 1) > 0.5 && (S.visibility ?? 1) > 0.5) f.trunk = Math.atan2((S.x - H.x) * AX, H.y - S.y) * 180 / Math.PI;
   if (EX.id === "tricep") {
     const E = side === "R" ? lm[LM.RE] : lm[LM.LE], Wp = side === "R" ? lm[LM.RW] : lm[LM.LW];
     if ((H.visibility ?? 1) > 0.5 && (S.visibility ?? 1) > 0.5) {
-      f.trunk = Math.atan2(S.x - H.x, H.y - S.y) * 180 / Math.PI;
+      f.trunk = Math.atan2((S.x - H.x) * AX, H.y - S.y) * 180 / Math.PI;
       if ((E.visibility ?? 1) > 0.5) f.uarm = angleAt(E, S, H);
     }
     if (handPts && !precBusy && performance.now() - handT < 300 && (E.visibility ?? 1) > 0.5 && (Wp.visibility ?? 1) > 0.3) {
-      const fa = { x: Wp.x - E.x, y: Wp.y - E.y }, hv = { x: handPts[9].x - handPts[0].x, y: handPts[9].y - handPts[0].y };
+      const fa = { x: (Wp.x - E.x) * AX, y: Wp.y - E.y }, hv = { x: (handPts[9].x - handPts[0].x) * AX, y: handPts[9].y - handPts[0].y };
       const c = (fa.x * hv.x + fa.y * hv.y) / ((Math.hypot(fa.x, fa.y) * Math.hypot(hv.x, hv.y)) || 1);
       const w = Math.acos(Math.max(-1, Math.min(1, c))) * 180 / Math.PI;
       wristEma = wristEma == null ? w : wristEma * 0.6 + w * 0.4; f.wrist = wristEma;
@@ -1158,7 +1249,7 @@ function features(lm, side, wl) {
   // pelvis/hipRise: 몸통 기울기(2D, 어깨-골반 선이 수직에서 벗어난 절대각 °, 측면 뷰), 어깨 y, 무릎각
   if (EX.checks.includes("pelvis") || EX.checks.includes("hipRise")) {
     if (S.visibility > CONF_TH && H.visibility > CONF_TH) {
-      f.tilt = Math.atan2(Math.abs(S.x - H.x), Math.abs(H.y - S.y) || 1e-6) * 180 / Math.PI;
+      f.tilt = Math.atan2(Math.abs(S.x - H.x) * AX, Math.abs(H.y - S.y) || 1e-6) * 180 / Math.PI;
       f.shoulderY = S.y;
       const K = side === "R" ? lm[LM.RK] : lm[LM.LK], A = side === "R" ? lm[LM.RA] : lm[LM.LA];
       if (K.visibility > CONF_TH && A.visibility > CONF_TH) f.kneeAng = angleAt(H, K, A);
@@ -1302,7 +1393,7 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
     const shx = (lm[LM.LS].x + lm[LM.RS].x) / 2, facing = (lm[0].visibility ?? 1) > 0.3 ? Math.sign(lm[0].x - shx) || 1 : (kickFacing || 1);
     kickFacing = facing;
     const val = t => { const S = lm[t[0]], H = lm[t[1]], K = lm[t[2]];
-      const v1 = { x: H.x - S.x, y: H.y - S.y }, v2 = { x: K.x - H.x, y: K.y - H.y };
+      const v1 = { x: (H.x - S.x) * AX, y: H.y - S.y }, v2 = { x: (K.x - H.x) * AX, y: K.y - H.y };
       return 180 + facing * Math.atan2(v1.x * v2.y - v1.y * v2.x, v1.x * v2.x + v1.y * v2.y) * 180 / Math.PI; };
     const aL = visL > 0.3 ? val(J.L) : -1, aR = visR > 0.3 ? val(J.R) : -1;
     const side = aL >= aR ? "L" : "R", idx = J[side];
@@ -1322,10 +1413,39 @@ function measureFrame(lm) { // 관절 원시 각도 + 추적 쪽 + 신뢰도 (�
   const out = tri.some(p => p.visibility === 0);
   return { side, tri, vis: Math.max(visL, visR), raw: out && lastGood != null ? lastGood : angleAt(tri[0], tri[1], tri[2]), J, out };
 }
+// 튄 값 처리: 한 프레임에 40° 넘게 바뀌면 관절점이 엉뚱한 곳(기계·다른 사람)에 찍힌 것으로 보고 직전 각도 유지(angleHeld).
+// 예전에는 이 거부가 끝없이 이어져 각도가 멈춰 버림(가림 3초 → 10회 중 3회) → 1.5초 넘게 이어지면 새 값으로 재동기화.
+// 재동기화 직후 3초 안에 원래 값 근처로 돌아오면 그건 가림이 풀린 것 → 바로 복귀.
+var jumpSince = 0, preJump = null, resyncT = -1e9, angleHeld = false, resyncSnap = null, resyncDir = 0, angVel = 0, prevMed = null, holdInfo = null, resumeInfo = null;
+const JUMP_DEG = 35, JUMP_HOLD_MS = 1500; // 11.09-3: 25→35. 화면 비율 보정 뒤 실제 각도 변화가 커져서 빠른 반복(숄더 프레스 0.4초 하강)을 튐으로 오인해 2회 놓침 (실영상 4회 → 35°에서 7회 = 정답)
 function smoothAngle(raw, J) { // 물리 하한 → 5프레임 median → EMA. win/smooth/lastGood 갱신
   if (raw < J.minPhys) raw = lastGood ?? raw; else lastGood = raw;
-  const med = median(raw);
-  if (!(smooth != null && Math.abs(med - smooth) > 40)) smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
+  const med = median(raw), now = clock();
+  // 지금 움직이는 속도로 예상한 각도(pred)에서 25° 넘게 벗어나면 튐 — 빠른 동작은 예상에 반영돼 튐으로 오인되지 않음
+  const pred = prevMed == null ? smooth : prevMed + angVel;
+  if (smooth != null && Math.abs(med - pred) > JUMP_DEG && Math.abs(med - smooth) > JUMP_DEG) {
+    // 돌아옴 판단: 재동기화 3초 안에 반대 방향으로 다시 크게 튐 (가림이 풀리면 점이 제자리로 돌아오며 생기는 모양)
+    const back = preJump != null && now - resyncT < 3000 && Math.sign(med - pred) === -resyncDir;
+    if (!back) {
+      // 가림 중 실제 동작이 계속돼서 돌아온 값이 예상과 다른 경우: 가려지기 직전 값 근처면 복귀로 봄
+      if (jumpSince && holdInfo && preJump == null && Math.abs(med - holdInfo.a) < JUMP_DEG && now - jumpSince > 200) {
+        resumeInfo = holdInfo; holdInfo = null; jumpSince = 0; angleHeld = false; win.length = 0; win.push(med); smooth = med; prevMed = med; angVel = 0; return smooth;
+      }
+      if (!jumpSince) { jumpSince = now; if (!holdInfo) holdInfo = { t: now, a: smooth, v: angVel }; } // 가려지기 직전 각도·방향 기억
+      if (now - jumpSince < JUMP_HOLD_MS) { angleHeld = true; return smooth; }
+      resyncSnap = snapshotState(); resyncDir = Math.sign(med - pred); preJump = smooth; resyncT = now; if (holdInfo) resumeInfo = { ...holdInfo }; // 오래 이어짐 → 실제 변화로 인정 (판정 상태는 저장해 둠)
+    } else { // 원래 값으로 돌아옴 = 가림이었음 → 그 사이 판정(센 횟수·학습 범위)을 되돌림
+      if (resyncSnap) { restoreState(resyncSnap); if (!quiet) repsEl.textContent = reps; }
+      preJump = null; resyncSnap = null; resumeInfo = holdInfo; holdInfo = null;
+    }
+    jumpSince = 0; angleHeld = false; win.length = 0; win.push(med); smooth = med; prevMed = med; angVel = 0; return smooth;
+  }
+  if (angleHeld && holdInfo && !preJump) { resumeInfo = holdInfo; } // 짧은 가림이 끝나고 제자리 값으로 돌아옴
+  if (!angleHeld && holdInfo && !preJump) holdInfo = null;
+  if (preJump != null && now - resyncT >= 3000) { preJump = null; resyncSnap = null; holdInfo = null; } // 재동기화 확정
+  if (prevMed != null) angVel = angVel * 0.5 + (med - prevMed) * 0.5;
+  prevMed = med; jumpSince = 0; angleHeld = false;
+  smooth = smooth == null ? med : smooth * 0.5 + med * 0.5;
   return smooth;
 }
 
@@ -1383,9 +1503,9 @@ function smoothFrames(frames, winN = PREC.medianWin) {
   return out;
 }
 // 3) 실시간 판정 상태 스냅샷/복원 — 재분석이 끝나면 화면 상태는 그대로
-function snapshotState() { return { sideCur, sideAlt, heelTop: heelTop.slice(), hipEma, reps, repList, cur, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
-function restoreState(s) { sideCur = s.sideCur || null; sideAlt = s.sideAlt || 0; heelTop = s.heelTop || []; hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
-function resetJudgeState() { sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
+function snapshotState() { return { tpMin: tpMin.slice(), tpMax: tpMax.slice(), tpDir, tpCand, holdInfo, angVel, prevMed, obsHist: obsHist.slice(), learnBuf: learnBuf.slice(), jumpSince, preJump, resyncT, angleHeld, sideCur, sideAlt, heelTop: heelTop.slice(), hipEma, reps, repList: repList.map(r => ({ ...r, flags: r.flags ? [...r.flags] : r.flags })), cur: cur ? { ...cur } : null, phase, obsMin, obsMax, obsFrames, win: win.slice(), smooth, lastGood, hipAnchor, torsoLen, neckStand, calib, lastSpeak }; }
+function restoreState(s) { tpMin = s.tpMin || []; tpMax = s.tpMax || []; tpDir = s.tpDir || 0; tpCand = s.tpCand ?? null; holdInfo = s.holdInfo ?? null; angVel = s.angVel || 0; prevMed = s.prevMed ?? null; obsHist = s.obsHist || []; learnBuf = s.learnBuf || []; jumpSince = s.jumpSince || 0; preJump = s.preJump ?? null; resyncT = s.resyncT ?? -1e9; angleHeld = !!s.angleHeld; sideCur = s.sideCur || null; sideAlt = s.sideAlt || 0; heelTop = s.heelTop || []; hipEma = s.hipEma; reps = s.reps; repList = s.repList; cur = s.cur; phase = s.phase; obsMin = s.obsMin; obsMax = s.obsMax; obsFrames = s.obsFrames; win.length = 0; win.push(...s.win); smooth = s.smooth; lastGood = s.lastGood; hipAnchor = s.hipAnchor; torsoLen = s.torsoLen; neckStand = s.neckStand; calib = s.calib; lastSpeak = s.lastSpeak; }
+function resetJudgeState() { holdInfo = null; resumeInfo = null; angVel = 0; prevMed = null; resyncSnap = null; jumpSince = 0; preJump = null; resyncT = -1e9; angleHeld = false; sideCur = null; sideAlt = 0; heelTop = []; hipEma = null; resetRail(); reps = 0; repList = []; phase = null; cur = null; hipAnchor = null; win.length = 0; smooth = null; lastGood = null; neckStand = null; resetAuto(); calib = { done: true, start: 0, stable: 30, body: calib ? calib.body : null }; }
 // 4) 재판정 (순수 함수: 영상 디코딩 없음 — frames = [{ t(ms), lm, wl }]). 기존 features/judge/finishRep 파이프라인 재사용, 2패스
 //    패스1 = learnRange 만 돌려 obsMin/obsMax 확보(자동 학습 기준이 첫 프레임부터 적용), 패스2 = 판정. thresholds() 우선순위는 그대로
 function reanalyzeFrames(frames, opts = {}) {
@@ -1396,8 +1516,9 @@ function reanalyzeFrames(frames, opts = {}) {
     const sm = smoothFrames(frames, opts.medianWin ?? PREC.medianWin).filter(fr => fr.lm);
     resetJudgeState();
     for (const fr of sm) { frameT = fr.t; const m = measureFrame(fr.lm); const a = smoothAngle(m.raw, m.J); if (m.vis > CONF_TH) learnRange(a); }
-    const keep = { obsMin, obsMax, obsFrames };
+    const keep = { obsMin, obsMax, obsFrames, tpMin: tpMin.slice(), tpMax: tpMax.slice() };
     resetJudgeState(); obsMin = keep.obsMin; obsMax = keep.obsMax; obsFrames = keep.obsFrames;
+    tpMin = keep.tpMin; tpMax = keep.tpMax; tpForce = tpMin.length >= 1 && tpMax.length >= 1 && (tpMin.length < TP_NEED || tpMax.length < TP_NEED); // 1패스에서 배운 범위를 처음부터 적용
     let visSum = 0, visN = 0;
     for (const fr of sm) {
       frameT = fr.t;
@@ -1513,11 +1634,13 @@ $("tabPrec").onclick = () => { if (precReport && repView !== "prec") { repView =
 
 function loop() {
   if (!running) return;
+  setAspect(video.videoWidth, video.videoHeight);
   const t = performance.now();
   // 영상이 아직 준비 안 됐거나 같은 프레임이면 건너뜀
   if (!video.videoWidth || t - lastDetectT < 15) { requestAnimationFrame(loop); return; }
   lastDetectT = t;
   let res;
+  if (modelSwitching) { requestAnimationFrame(loop); return; } // 모델 바꾸는 중
   try { res = landmarker.detectForVideo(video, t); detectErrors = 0; }
   catch (e) {
     detectErrors++;
@@ -1545,9 +1668,7 @@ function loop() {
     if (vis > CONF_TH) {
       learnRange(smooth);
       if (frames % 10 === 0) { paintAuto(); paintSrc(); }
-      const th = thresholds();
-      if (th.src === "학습 대기" || (th.src === "자동 학습" && !autoReady())) hint(obsMin == null ? "천천히 1~2회 끝까지 움직여 주세요" : `범위 학습 중 ${obsMin.toFixed(0)}~${obsMax.toFixed(0)}°`, "info");
-      else judge(smooth, vis, f);
+      if (!angleHeld && !liveJudge(smooth, vis, f)) hint(obsMin == null ? "천천히 1~2회 끝까지 움직여 주세요" : `범위 학습 중 ${obsMin.toFixed(0)}~${obsMax.toFixed(0)}°`, "info");
     } else hint("관절이 잘 안 보여요", "info");
   } else {
     ctx.clearRect(0, 0, canvas.width, canvas.height); angleEl.textContent = "--";
@@ -1680,10 +1801,23 @@ paintFacing();
 
 let visionFiles = null;
 // 실시간 인식 모델: lite 는 빠르지만 관절 정확도가 낮음 → 기본을 full 로. 설정에서 변경 (formcoach.model)
-let modelKind = (() => { try {
-  // 한 번만: 예전에 저장된 MediaPipe 선택을 새 기본값 MoveNet 으로 바꿈 (이후 설정에서 고른 값은 유지)
-  if (!localStorage.getItem("formcoach.modelMig1")) { localStorage.setItem("formcoach.model", "movenet"); localStorage.setItem("formcoach.modelMig1", "1"); }
-  return localStorage.getItem("formcoach.model") || "movenet"; } catch { return "movenet"; } })();
+// 인식 모델: modelPref = 설정에서 고른 값(auto/movenet/lite/full/heavy), modelKind = 지금 실제로 쓰는 모델
+// 자동: 기구에 다리가 가려지는 종목은 MoveNet(17점, 가림에 강함), 나머지는 MediaPipe full(33점: 눈·코·입·손 3점·발 3점)
+let modelPref = (() => { try {
+  // 한 번만: 새 기본값 '자동'으로 (이후 설정에서 고른 값은 유지)
+  if (!localStorage.getItem("formcoach.modelMig2")) { localStorage.setItem("formcoach.model", "auto"); localStorage.setItem("formcoach.modelMig2", "1"); }
+  return localStorage.getItem("formcoach.model") || "auto"; } catch { return "auto"; } })();
+const MOVENET_EX = new Set(["legpress", "legext", "legcurl", "inthigh", "outthigh"]);
+const effModel = id => modelPref === "auto" ? (MOVENET_EX.has(id) ? "movenet" : "full") : modelPref;
+let modelKind = effModel(EX.id);
+var modelReady = false, modelSwitching = false; // var: 시작할 때 applyExercise 가 이 줄보다 먼저 실행돼도 오류 없게
+async function ensureModel() { // 종목·설정에 맞는 모델로 바꿈 (이미 맞으면 그대로)
+  if (!modelReady) return;
+  const k = effModel(EX.id); if (k === modelKind) return;
+  modelSwitching = true; modelKind = k; toast(k === "movenet" ? "인식 모델: MoveNet (기구 다리 운동)" : "인식 모델: MediaPipe 33점");
+  try { await rebuildLandmarker("GPU"); } catch { try { await rebuildLandmarker("CPU"); } catch { toast("모델 전환 실패"); } }
+  finally { modelSwitching = false; }
+}
 // ── MoveNet Thunder (Google, Apache-2.0) 어댑터 ─────────────────────────────
 // MediaPipe 와 같은 모양(landmarks[0] = 33점, x·y 정규화, visibility)으로 돌려줘서 나머지 코드는 그대로 동작.
 // MoveNet 점수는 MediaPipe visibility 보다 낮게 나옴 → 권장 임계 0.3 이 앱 임계 0.6(CONF_TH)에 오도록 ×2 환산.
@@ -1738,6 +1872,7 @@ const modelOpts = delegate => ({
 });
 async function init() {
   try {
+    modelKind = effModel(EX.id);
     if (modelKind === "movenet") {
       statusEl.textContent = "인식 모델(MoveNet) 받는 중…";
       try { landmarker = await createMoveNet("webgl"); } catch (e) { try { landmarker = await createMoveNet("cpu"); } catch { modelKind = "full"; toast("MoveNet 로딩 실패 → MediaPipe 로 전환"); } }
@@ -1749,10 +1884,11 @@ async function init() {
     statusEl.textContent = "종목을 고르고 시작을 누르세요.";
     startBtn.disabled = false; startBtn.textContent = "시작"; $("scanBtn0").disabled = false;
     paintProfile(); paintSrc(); paintMachine();
-    $("modelSel").value = modelKind;
+    modelReady = true;
+    $("modelSel").value = modelPref;
     $("modelSel").onchange = async e => {
-      modelKind = e.target.value; try { localStorage.setItem("formcoach.model", modelKind); } catch {}
-      toast("인식 모델 바꾸는 중…"); try { await rebuildLandmarker("GPU"); } catch { try { await rebuildLandmarker("CPU"); } catch { toast("모델 전환 실패"); } }
+      modelPref = e.target.value; try { localStorage.setItem("formcoach.model", modelPref); } catch {}
+      await ensureModel();
     };
     await listCams();
   } catch (e) { statusEl.textContent = "모델 로딩 실패: 인터넷 연결을 확인하세요. (" + e.message + ")"; }
